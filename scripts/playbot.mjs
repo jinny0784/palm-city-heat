@@ -72,19 +72,30 @@ async function walkTo(tx, ty, timeoutMs = 60000) {
   if (!s0) return false;
   const wps = [...waypoints(s0.px, s0.py, tx, ty), { x: tx, y: ty }];
   const end = Date.now() + timeoutMs;
+  let lastX = s0.px; let lastY = s0.py; let lastMove = Date.now(); let sideUntil = 0;
   for (const wp of wps) {
     while (Date.now() < end) {
       const s = await readState();
       if (!s) return false;
       if (s.inCar) { await setKeys(new Set()); return true; }
+      if (s.over) { await setKeys(new Set()); return false; }
       const dx = wp.x - s.px; const dy = wp.y - s.py;
       const dist = Math.hypot(dx, dy);
       if (dist < 35) break;
+      // Stuck against a wall (a stopped player gets busted): sidestep around it.
+      if (Math.hypot(s.px - lastX, s.py - lastY) > 12) { lastX = s.px; lastY = s.py; lastMove = Date.now(); }
+      if (Date.now() - lastMove > 2000) { sideUntil = Date.now() + 900; lastMove = Date.now(); }
       const want = new Set();
-      if (dx < -15) want.add('KeyA');
-      if (dx > 15) want.add('KeyD');
-      if (dy < -15) want.add('KeyW');
-      if (dy > 15) want.add('KeyS');
+      if (Date.now() < sideUntil) {
+        // Move perpendicular to the blocked direction.
+        if (Math.abs(dx) > Math.abs(dy)) { if (dy >= 0) want.add('KeyS'); else want.add('KeyW'); }
+        else { if (dx >= 0) want.add('KeyD'); else want.add('KeyA'); }
+      } else {
+        if (dx < -15) want.add('KeyA');
+        if (dx > 15) want.add('KeyD');
+        if (dy < -15) want.add('KeyW');
+        if (dy > 15) want.add('KeyS');
+      }
       if (dist > 200) want.add('ShiftLeft');
       await setKeys(want);
       await sleep(120);
@@ -122,7 +133,7 @@ async function driveTo(tx, ty, timeoutMs = 150000, label = 'drive') {
         if (steals > 3) { log(`${label}: too many wrecks, giving up`); return false; }
         log(`${label}: car lost at wp${wi}, re-stealing (#${steals})`);
         await setKeys(new Set());
-        if (!(await getCar(60000))) { log(`${label}: could not re-steal`); return false; }
+        if (!(await getCar(30000))) { log(`${label}: could not re-steal`); return false; }
         const ns = await readState();
         wps = waypoints(ns.px, ns.py, tx, ty);
         wi = 0;
@@ -135,17 +146,17 @@ async function driveTo(tx, ty, timeoutMs = 150000, label = 'drive') {
       if (dist < lastDist - 5) { lastDist = dist; lastProg = Date.now(); }
       const desired = Math.atan2(dy, dx);
       const err = wrap(desired - s.carAngle);
-      // Speed control: never floor it while turning hard, never arrive at a
-      // waypoint at 600 px/s (the car rams the building across the junction
-      // and wrecks in seconds). Coast/brake to keep speed sane.
+      // Speed control: creep at low speed so the car can rotate toward the
+      // target; cruise up to ~300; brake above that and on arrival. A car
+      // at 500+ px/s wrecks itself on the building across the junction.
       const want = new Set();
-      const fast = s.carSpeed > 320;
-      const veryFast = s.carSpeed > 430;
-      if (!veryFast && Math.abs(err) < 0.6 && dist > 120) want.add('KeyW');
-      else if (s.carSpeed < 150 && Math.abs(err) < 0.25) want.add('KeyW');
+      const spd = s.carSpeed;
+      if (spd < 120) want.add('KeyW'); // creep — lets the car turn
+      else if (spd < 300 && Math.abs(err) < 0.6 && dist > 100) want.add('KeyW');
+      else if (spd < 160 && Math.abs(err) < 0.25) want.add('KeyW');
       if (err > 0.12) want.add(steerRightKey);
       else if (err < -0.12) want.add(steerRightKey === 'KeyD' ? 'KeyA' : 'KeyD');
-      if ((fast && Math.abs(err) > 0.25) || (dist < 300 && s.carSpeed > 150)) { want.delete('KeyW'); want.add('KeyS'); } // brake into the turn / arrival
+      if (spd > 300 || (dist < 300 && spd > 160) || (Math.abs(err) > 1.0 && spd > 120)) { want.delete('KeyW'); want.add('KeyS'); }
       if (Date.now() - lastProg > 1500) {
         // Stuck: reverse out.
         stuckCount += 1;
