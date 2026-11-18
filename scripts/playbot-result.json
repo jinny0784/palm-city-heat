@@ -1,0 +1,36 @@
+{
+  "loaded": true,
+  "started": true,
+  "gotCar": true,
+  "m1": false,
+  "m2": false,
+  "m3": false,
+  "m4": false,
+  "m5": false,
+  "storyComplete": false,
+  "maxWanted": 1,
+  "policeSeen": 0,
+  "policeChased": false,
+  "cratesShot": 0,
+  "errors": [],
+  "log": [
+    "13:39:02 started, t=0.8, missionActive=false",
+    "13:39:03 M1 active: missionIndex=0 obj={\"kind\":\"goto\",\"x\":330,\"y\":2680,\"r\":70,\"text\":\"Pick up the package at the DOCKS\"}",
+    "13:39:03 got car: true",
+    "13:39:04 steer calibration: dAngle=0.96 -> err>0 uses KeyD",
+    "13:39:12 M1 leg1: lost car at wp0",
+    "13:39:12 M1 leg1 reached=false missionObj=0 missionIndex=0",
+    "13:39:12 M1 leg2: lost car at wp0",
+    "13:39:12 M1 leg2 reached=false missionIndex=0"
+  ],
+  "durationSec": 14,
+  "final": {
+    "missionIndex": 0,
+    "missionObj": 0,
+    "cash": 0,
+    "wanted": 1,
+    "storyComplete": false,
+    "over": null,
+    "t": 10.9
+  }
+}
