@@ -50,7 +50,7 @@ export const CAR = {
 
 export const TRAFFIC = { count: 14, speed: 150, speedJitter: 40 };
 export const PARKED = { count: 12 };
-export const PEDS = { count: 22, walkSpeed: 62, fleeSpeed: 265 };
+export const PEDS = { count: 22, walkSpeed: 62, fleeSpeed: 265, scareRadius: 320 };
 
 export const POLICE = {
   maxCars: 4,

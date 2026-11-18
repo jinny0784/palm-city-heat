@@ -368,6 +368,13 @@ export function createWorld(random) {
       life: PISTOL.range / PISTOL.bulletSpeed, from, damage,
     });
     addParticles(fromX + Math.cos(angle) * 26, fromY + Math.sin(angle) * 26, 3, '#ffd94a', 90, 0.12, 3);
+    // Gunfire scares nearby pedestrians into fleeing.
+    for (const ped of peds) {
+      if (ped.state !== 'flee' && ped.down <= 0 && Math.hypot(ped.x - fromX, ped.y - fromY) < PEDS.scareRadius) {
+        ped.state = 'flee';
+        ped.stateTimer = 2 + random() * 2;
+      }
+    }
   }
 
   function spawnPoliceCar() {
