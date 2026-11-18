@@ -66,22 +66,33 @@ async function setKeys(want) {
 async function pressKey(k, ms = 120) { await page.keyboard.down(k); await sleep(ms); await page.keyboard.up(k); }
 
 async function walkTo(tx, ty, timeoutMs = 60000) {
+  // Walk via the road grid (a straight line crosses buildings and the
+  // player gets stuck pushing against a wall), sprinting on long stretches.
+  const s0 = await readState();
+  if (!s0) return false;
+  const wps = [...waypoints(s0.px, s0.py, tx, ty), { x: tx, y: ty }];
   const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    const s = await readState();
-    if (!s) return false;
-    const dx = tx - s.px; const dy = ty - s.py;
-    if (Math.hypot(dx, dy) < 40) { await setKeys(new Set()); return true; }
-    const want = new Set();
-    if (dx < -20) want.add('KeyA');
-    if (dx > 20) want.add('KeyD');
-    if (dy < -20) want.add('KeyW');
-    if (dy > 20) want.add('KeyS');
-    await setKeys(want);
-    await sleep(120);
+  for (const wp of wps) {
+    while (Date.now() < end) {
+      const s = await readState();
+      if (!s) return false;
+      if (s.inCar) { await setKeys(new Set()); return true; }
+      const dx = wp.x - s.px; const dy = wp.y - s.py;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 35) break;
+      const want = new Set();
+      if (dx < -15) want.add('KeyA');
+      if (dx > 15) want.add('KeyD');
+      if (dy < -15) want.add('KeyW');
+      if (dy > 15) want.add('KeyS');
+      if (dist > 200) want.add('ShiftLeft');
+      await setKeys(want);
+      await sleep(120);
+    }
   }
   await setKeys(new Set());
-  return false;
+  const s = await readState();
+  return s ? Math.hypot(tx - s.px, ty - s.py) < 45 : false;
 }
 
 function waypoints(x, y, tx, ty) {
@@ -124,14 +135,17 @@ async function driveTo(tx, ty, timeoutMs = 150000, label = 'drive') {
       if (dist < lastDist - 5) { lastDist = dist; lastProg = Date.now(); }
       const desired = Math.atan2(dy, dx);
       const err = wrap(desired - s.carAngle);
-      // Speed control: never floor it while turning hard — that is how the
-      // car rams walls at 500 px/s and wrecks. Coast/steer when |err| is big.
+      // Speed control: never floor it while turning hard, never arrive at a
+      // waypoint at 600 px/s (the car rams the building across the junction
+      // and wrecks in seconds). Coast/brake to keep speed sane.
       const want = new Set();
-      if (Math.abs(err) < 0.6 && dist > 120) want.add('KeyW');
-      else if (Math.abs(err) < 0.25) want.add('KeyW');
+      const fast = s.carSpeed > 320;
+      const veryFast = s.carSpeed > 430;
+      if (!veryFast && Math.abs(err) < 0.6 && dist > 120) want.add('KeyW');
+      else if (s.carSpeed < 150 && Math.abs(err) < 0.25) want.add('KeyW');
       if (err > 0.12) want.add(steerRightKey);
       else if (err < -0.12) want.add(steerRightKey === 'KeyD' ? 'KeyA' : 'KeyD');
-      if (s.carSpeed > 260 && Math.abs(err) > 0.4) { want.delete('KeyW'); want.add('KeyS'); } // brake into the turn
+      if ((fast && Math.abs(err) > 0.25) || (dist < 300 && s.carSpeed > 150)) { want.delete('KeyW'); want.add('KeyS'); } // brake into the turn / arrival
       if (Date.now() - lastProg > 1500) {
         // Stuck: reverse out.
         stuckCount += 1;
