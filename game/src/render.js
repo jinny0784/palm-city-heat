@@ -637,14 +637,17 @@ export function createRenderer(canvas) {
       text(player.reloadTimer > 0 ? 'RELOADING…' : `${player.ammo} / ${PISTOL.magSize}`, view.w - 26, view.h - 22, 13, player.ammo === 0 ? '#ff5a4a' : '#d8d0bc', 'right', true);
     }
 
-    // Toast, bottom-centre.
+    // Minimap first: the toast below must sit on top of it, not under it.
+    drawMinimap(world);
+
+    // Toast, bottom-centre, above the minimap.
     if (st.toast && st.time < st.toastUntil) {
       context.font = font(15, false);
       const w = Math.min(view.w - 40, context.measureText(st.toast).width + 32);
       context.fillStyle = 'rgba(10,20,26,0.78)';
-      rr((view.w - w) / 2, view.h - 116, w, 34, 8);
+      rr((view.w - w) / 2, view.h - 190, w, 34, 8);
       context.fill();
-      text(st.toast, view.w / 2, view.h - 93, 15, '#fff8ea', 'center');
+      text(st.toast, view.w / 2, view.h - 167, 15, '#fff8ea', 'center');
     }
 
     // Busted meter.
@@ -665,8 +668,6 @@ export function createRenderer(canvas) {
       text('WASD move · Mouse aim · Click / Space shoot · E enter car · Shift sprint · P pause · M mute', view.w / 2, view.h - 130, 14, 'rgba(255,248,234,0.85)', 'center');
     }
     if (ui.muted) text('MUTED', view.w / 2, 66, 13, 'rgba(255,248,234,0.6)', 'center', true);
-
-    drawMinimap(world);
   }
 
   function drawPanel(title, lines, prompt, accent) {

@@ -90,7 +90,7 @@ export function createWorld(random) {
     const car = {
       id: carId += 1, x, y, angle, vx: 0, vy: 0, speed: 0,
       kind, color: kind === 'taxi' ? TAXI_COLOR : CAR_COLORS[Math.floor(random() * CAR_COLORS.length)],
-      health: CAR.health, driver, wrecked: false, target: false,
+      health: CAR.health, driver, wrecked: false, target: false, hitCd: 0,
       axis: 'v', line: ROADS_V[0], dir: 1, cruise: TRAFFIC.speed + random() * TRAFFIC.speedJitter,
       aiState: 'drive', aiTimer: 0, lastTurnRoad: -1, siren: random() * TAU,
     };
@@ -250,7 +250,7 @@ export function createWorld(random) {
     state.missionTimer = MISSIONS[index].timer ?? null;
     state.missionActive = true;
     state.passenger = false;
-    toast(`Mara Voss: ${MISSIONS[index].briefing}`, 6);
+    toast(MISSIONS[index].briefing, 6);
     return EVENT_MISSION;
   }
 
@@ -554,11 +554,12 @@ export function createWorld(random) {
     car.vx = Math.cos(car.angle) * car.speed;
     car.vy = Math.sin(car.angle) * car.speed;
     car.siren += dt * 6;
-    // Ram the player's car.
-    if (player.inCar && d < 46) {
+    // Ram the player's car (throttled: a ram is one hit, not one per step).
+    if (player.inCar && d < 46 && player.inCar.hitCd <= 0) {
       const rel = Math.hypot(car.vx - player.inCar.vx, car.vy - player.inCar.vy);
       if (rel > 120) {
-        damageCar(player.inCar, 8, car.x, car.y);
+        damageCar(player.inCar, 5, car.x, car.y);
+        player.inCar.hitCd = 0.6;
         state.shake = Math.max(state.shake, 7);
         addParticles(player.inCar.x, player.inCar.y, 8, '#ffb84a', 140, 0.5, 4);
       }
@@ -614,8 +615,9 @@ export function createWorld(random) {
       const hit = city.resolveCircle(car, 30);
       if (hit) {
         const impact = Math.hypot(car.vx, car.vy);
-        if (impact > 220) {
+        if (impact > 220 && car.hitCd <= 0) {
           damageCar(car, (impact - 220) / 14, before.x, before.y);
+          car.hitCd = 0.6;
           state.shake = Math.max(state.shake, Math.min(12, impact / 40));
           state.stats.crashes += 1;
           addParticles(car.x, car.y, 10, '#ffb84a', 160, 0.5, 4);
@@ -1000,9 +1002,11 @@ export function createWorld(random) {
         b.x += nx * push;
         b.y += ny * push;
         const rel = Math.hypot(a.vx - b.vx, a.vy - b.vy);
-        if (rel > 170) {
-          damageCar(a, (rel - 170) / 16, b.x, b.y);
-          damageCar(b, (rel - 170) / 16, a.x, a.y);
+        if (rel > 170 && (a.hitCd <= 0 || b.hitCd <= 0)) {
+          damageCar(a, (rel - 170) / 22, b.x, b.y);
+          damageCar(b, (rel - 170) / 22, a.x, a.y);
+          a.hitCd = 0.6;
+          b.hitCd = 0.6;
           state.shake = Math.max(state.shake, 5);
           addParticles((a.x + b.x) / 2, (a.y + b.y) / 2, 8, '#ffb84a', 140, 0.5, 4);
           if (a.driver === 'traffic' || b.driver === 'traffic') {
@@ -1010,10 +1014,7 @@ export function createWorld(random) {
             t.aiState = 'flee';
             t.aiTimer = 2.5;
           }
-          if (a.driver === 'player' || b.driver === 'player') {
-            state.stats.crashes += 1;
-            if (a.driver === 'police' || b.driver === 'police') addWanted(1);
-          }
+          if (a.driver === 'player' || b.driver === 'player') state.stats.crashes += 1;
         }
         // Exchange a little velocity so they separate instead of sticking.
         const avx = a.vx;
@@ -1050,6 +1051,7 @@ export function createWorld(random) {
 
     if (!harmless) events |= updatePlayer(dt, input);
     for (const car of cars) {
+      if (car.hitCd > 0) car.hitCd -= dt;
       if (car.driver === 'traffic') updateTrafficCar(car, dt);
       else if (car.driver === 'police') updatePoliceCar(car, dt);
       else if (car.driver === 'player') {

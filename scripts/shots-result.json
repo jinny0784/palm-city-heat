@@ -1,0 +1,34 @@
+[
+  {
+    "shot": "1-title.jpg",
+    "ok": true,
+    "width": 1280,
+    "height": 800,
+    "bytes": 105819,
+    "note": "[1118/133143.430995:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory\n[1118/133143.432319:ERROR:dbus/bus.cc:405] F"
+  },
+  {
+    "shot": "2-street.jpg",
+    "ok": true,
+    "width": 1280,
+    "height": 800,
+    "bytes": 108424,
+    "note": "[1118/133144.613452:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory\n[1118/133144.613598:ERROR:dbus/bus.cc:405] F"
+  },
+  {
+    "shot": "3-driving.jpg",
+    "ok": true,
+    "width": 1280,
+    "height": 800,
+    "bytes": 102340,
+    "note": "[1118/133146.217720:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory\n[1118/133146.217815:ERROR:dbus/bus.cc:405] F"
+  },
+  {
+    "shot": "4-chase.jpg",
+    "ok": true,
+    "width": 1280,
+    "height": 800,
+    "bytes": 103047,
+    "note": "[1118/133146.950649:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory\n[1118/133146.950772:ERROR:dbus/bus.cc:405] F"
+  }
+]

@@ -63,14 +63,13 @@ export function stageShot(name, world) {
   if (name === 'driving') {
     // Behind the wheel on Coral Row, traffic ahead, palms on the sidewalk.
     stageDrive(world, 932, 700);
-    stepFor(world, 5, driveInput(0));
+    stepFor(world, 3, driveInput(0));
     return { screen: SCREEN_PLAY };
   }
-  // Chase: three stars, two police cars closing in, the player flooring it.
+  // Chase: three stars, police cars closing in, the player flooring it straight
+  // down Coral Row (steering off-road would wreck the car on the buildings).
   stageDrive(world, 932, 700);
   world.addWanted(3);
   stepFor(world, 3, driveInput(0));
-  stepFor(world, 4, driveInput(0.4));
-  stepFor(world, 2, driveInput(-0.3));
   return { screen: SCREEN_PLAY };
 }
