@@ -1,33 +1,52 @@
-// Palm City Heat — the make.fun gta6-01 entrypoint (Node 22, standard
-// library only, no build step: `node main.ts`).
-//
-// The game itself is the static site in game/ — plain HTML, CSS and ES
-// modules that a desktop browser loads offline. This program hands the
-// entry in: it copies game/ and screenshots/ from beside this file into
-// the output directory (MAKEFUN_OUTPUT_DIR, or /output when unset) and
-// writes dossier.json there, built by the vendored make.fun library in
-// vendor/makefun-game.ts with the bounty's gate caps. The dossier is
-// canonical and deterministic: the same tree always writes the same
-// bytes, so two runs of this program produce identical output.
+/**
+ * main.ts — the make.fun entrypoint for Palm City Heat.
+ *
+ * Running `node main.ts` packages the entry: it mirrors the playable game
+ * (the static site under game/) and the screenshot set (screenshots/) into
+ * the output directory, then asks the vendored make.fun library to compile
+ * dossier.json describing that tree. The dossier build is deterministic —
+ * the same tree in, the same bytes out — so repeat runs are byte-identical.
+ *
+ * Node 22+, standard library only; no build step, no dependencies.
+ */
 
-import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildDossier } from './vendor/makefun-game.ts';
+import { cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import * as makefun from "./vendor/makefun-game.ts";
 
+// The bounty's gate caps, named for what they guard. These are the limits
+// the dossier is compiled against: how large a single text file may be, how
+// many screenshots may ship and how heavy each may be, and the ceiling on
+// the game's file count and total size.
+const LIMIT_TEXT_FILE_BYTES = 163_840;
+const LIMIT_SCREENSHOT_COUNT = 4;
+const LIMIT_SCREENSHOT_BYTES = 262_144;
+const LIMIT_GAME_FILE_COUNT = 993;
+const LIMIT_GAME_TOTAL_BYTES = 50_331_648;
+
+// Where the finished entry lands: MAKEFUN_OUTPUT_DIR when the harness sets
+// it, /output by convention otherwise.
 const here = dirname(fileURLToPath(import.meta.url));
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 
+// Mirror the two payload trees next to this file into the output dir.
 mkdirSync(outDir, { recursive: true });
-for (const name of ['game', 'screenshots']) {
-  cpSync(join(here, name), join(outDir, name), { recursive: true });
+for (const tree of ["game", "screenshots"]) {
+  cpSync(join(here, tree), join(outDir, tree), { recursive: true });
 }
 
-const dossier = buildDossier(outDir, {
-  text_max_bytes: 163840,
-  screenshots: { max: 4, max_bytes: 262144 },
-  game_max_files: 993,
-  game_max_bytes: 50331648,
-});
-writeFileSync(join(outDir, 'dossier.json'), dossier);
-console.log(`Palm City Heat: game/ and screenshots/ copied to ${outDir}; dossier.json written (${dossier.length} bytes).`);
+// Compile the dossier with the caps gathered into one options object.
+const gateCaps = {
+  text_max_bytes: LIMIT_TEXT_FILE_BYTES,
+  screenshots: {
+    max: LIMIT_SCREENSHOT_COUNT,
+    max_bytes: LIMIT_SCREENSHOT_BYTES,
+  },
+  game_max_files: LIMIT_GAME_FILE_COUNT,
+  game_max_bytes: LIMIT_GAME_TOTAL_BYTES,
+};
+const dossierJson = makefun.buildDossier(outDir, gateCaps);
+writeFileSync(join(outDir, "dossier.json"), dossierJson);
+
+console.log(`Palm City Heat: game/ and screenshots/ copied to ${outDir}; dossier.json written.`);

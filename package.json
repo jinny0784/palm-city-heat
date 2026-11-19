@@ -1,1 +1,1 @@
-{"description":"Palm City Heat — an original top-down open-world crime game for the make.fun gta6-01 bounty.","name":"palm-city-heat","private":true,"type":"module"}
+{"description":"Palm City Heat — an original top-down open-world crime game for the make.fun Make GTA 6 bounty.","name":"palm-city-heat","private":true,"scripts":{"serve":"node serve.ts","smoke":"node scripts/smoke.mjs"},"type":"module","version":"1.0.0"}

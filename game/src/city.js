@@ -1,188 +1,182 @@
-// city.js — Palm City's layout: a road grid, city blocks with buildings,
-// palms and props, a beach and two piers on the east shore, and the named
-// places the story missions travel between. Pure data + geometry, no DOM,
-// so the Node smoke test can import it.
+// city.js — builds the static layout of Palm City from a seed: the road grid,
+// the buildings that fill its blocks, palms and street props, the named
+// places the story missions travel between, and the intersection graph the
+// traffic AI drives on. Pure data in, pure data out — no DOM, no globals —
+// so the smoke test can generate the same city the browser plays in.
 
-import {
-  WORLD_W, WORLD_H, ROADS_X, ROADS_Y, ROAD_W, BEACH_X, WATER_X, ROOF_COLORS,
-} from './config.js';
-import { mulberry32, pick, randRange, clamp } from './random.js';
+import { createRng } from './random.js';
+import { WORLD_W, WORLD_H, ROAD_W, BEACH_X, ROOF_PAINTS } from './config.js';
 
-// Named places (world coordinates). Markers, missions and pickups use these.
+// Centre-lines of the avenues (vertical) and streets (horizontal). The grid
+// stops short of the beach so the east side stays sand and water.
+export const AVENUES = [240, 720, 1200, 1680, 2160, 2640, 3120];
+export const STREETS = [240, 800, 1360, 1920, 2480];
+
+// Named story locations, spread so missions cross the whole map.
 export const PLACES = {
-  spawn: { x: 985, y: 855 },
-  docks: { x: 3560, y: 2540, label: 'the docks' },
-  warehouse: { x: 380, y: 360, label: 'the warehouse' },
-  goldCar: { x: 1620, y: 1560, label: 'the gold Sunfire GT' },
-  garage: { x: 250, y: 2150, label: "Mara's garage" },
-  depot: { x: 500, y: 2380, label: 'the depot' },
-  safehouse: { x: 1620, y: 960, label: 'the safehouse' },
-  airstrip: { x: 3100, y: 150, label: 'the airstrip' },
-  marina: { x: 3600, y: 950, label: 'the marina' },
-  spray: { x: 1475, y: 2224, label: "Pay 'n Spray" },
-  bags: [
-    { x: 340, y: 340 },
-    { x: 2240, y: 1560 },
-    { x: 3360, y: 2200 },
-  ],
+  docks: { x: 3300, y: 420, label: 'Palm Docks' },
+  warehouse: { x: 610, y: 2560, label: 'West Warehouse' },
+  garage: { x: 2290, y: 615, label: "Rico's Garage" },
+  depot: { x: 1570, y: 1090, label: 'Sunport Depot' },
+  safehouse: { x: 650, y: 2070, label: 'Safehouse' },
+  airstrip: { x: 380, y: 2620, label: 'Old Airstrip' },
+  marina: { x: 3470, y: 2560, label: 'Marina Pier' },
+  spray: { x: 1905, y: 1625, label: "Pay 'n Spray" },
+  hospital: { x: 1010, y: 905, label: 'Mercy Hospital' },
+  precinct: { x: 1505, y: 305, label: 'Precinct' },
 };
 
-// Wooden piers that reach over the water: walkable and drivable.
-export const PIERS = [
-  { x: 3520, y: 905, w: 330, h: 90 }, // marina pier, boat at the end
-  { x: 3500, y: 2495, w: 340, h: 90 }, // docks pier
+// Where the fixed pickups live (bribe stars, health, armour).
+export const BRIBE_SPOTS = [
+  { x: 830, y: 1470 },
+  { x: 2530, y: 905 },
+  { x: 2980, y: 2200 },
 ];
 
-// Open ground that is not a road: the airstrip apron up north and the
-// depot lot in the south-west. Buildings never cover these.
-export const APRON = { x: 2880, y: 40, w: 460, h: 180 };
-export const DEPOT_LOT = { x: 400, y: 2180, w: 460, h: 380 };
-export const SPRAY_BAY = { x: 1390, y: 2160, w: 170, h: 130 };
-
-const RESERVED = [APRON, DEPOT_LOT, SPRAY_BAY];
-
-export const INTERSECTIONS = [];
-for (const x of ROADS_X) for (const y of ROADS_Y) INTERSECTIONS.push({ x, y });
-
-function spans(centers, lo, hi) {
-  const out = [];
-  let cur = lo;
-  for (const c of centers) {
-    out.push([cur, c - ROAD_W / 2]);
-    cur = c + ROAD_W / 2;
+function blockFree(x, y, w, h, keepOut) {
+  for (const k of keepOut) {
+    if (x < k.x + k.w && x + w > k.x && y < k.y + k.h && y + h > k.y) return false;
   }
-  out.push([cur, hi]);
-  return out;
-}
-
-function rectsOverlap(a, b, pad = 0) {
-  return a.x - pad < b.x + b.w && a.x + a.w + pad > b.x &&
-    a.y - pad < b.y + b.h && a.y + a.h + pad > b.y;
+  return true;
 }
 
 export function generateCity(seed) {
-  const rng = mulberry32(seed * 7919 + 13);
+  const rng = createRng(seed * 7919 + 13);
+
+  // Keep-out pads around the named places so buildings never swallow a
+  // mission target or the Pay 'n Spray bay.
+  const keepOut = Object.values(PLACES).map((p) => ({ x: p.x - 85, y: p.y - 85, w: 170, h: 170 }));
+  keepOut.push({ x: 250, y: 2540, w: 620, h: 170 }); // airstrip runway
+
   const buildings = [];
-  const palms = [];
-  const props = [];
-  const parkingSpots = [];
-
-  const xSpans = spans(ROADS_X, 0, BEACH_X);
-  const ySpans = spans(ROADS_Y, 0, WORLD_H);
-
-  for (const [bx0, bx1] of xSpans) {
-    for (const [by0, by1] of ySpans) {
-      const ix = bx0 + 18;
-      const iy = by0 + 18;
-      const iw = bx1 - bx0 - 36;
-      const ih = by1 - by0 - 36;
-      if (iw < 70 || ih < 70) continue;
-
-      // Subdivide the block into lots.
-      const cols = iw > 380 ? 2 : 1;
-      const rows = ih > 300 ? 2 : 1;
-      const gap = 26;
-      const lotW = (iw - gap * (cols - 1)) / cols;
-      const lotH = (ih - gap * (rows - 1)) / rows;
-      for (let cx = 0; cx < cols; cx++) {
-        for (let cy = 0; cy < rows; cy++) {
-          const lot = {
-            x: ix + cx * (lotW + gap),
-            y: iy + cy * (lotH + gap),
-            w: lotW,
-            h: lotH,
-          };
-          if (RESERVED.some((r) => rectsOverlap(lot, r, 4))) continue;
-          const roll = rng();
-          if (roll < 0.12) {
-            // Parking lot: two spots, no building.
-            parkingSpots.push({ x: lot.x + lot.w * 0.3, y: lot.y + lot.h / 2, angle: Math.PI / 2 });
-            parkingSpots.push({ x: lot.x + lot.w * 0.7, y: lot.y + lot.h / 2, angle: Math.PI / 2 });
-          } else if (roll < 0.22) {
-            // Plaza: palms and open pavement.
-            const n = 3 + Math.floor(rng() * 3);
-            for (let i = 0; i < n; i++) {
-              palms.push({
-                x: lot.x + randRange(rng, 14, lot.w - 14),
-                y: lot.y + randRange(rng, 14, lot.h - 14),
-                s: randRange(rng, 0.8, 1.25),
-              });
-            }
-          } else {
-            buildings.push({
-              x: lot.x + 5,
-              y: lot.y + 5,
-              w: lot.w - 10,
-              h: lot.h - 10,
-              color: pick(rng, ROOF_COLORS),
-              height: randRange(rng, 10, 30),
-            });
-          }
+  const half = ROAD_W / 2;
+  for (let i = 0; i < AVENUES.length - 1; i++) {
+    for (let j = 0; j < STREETS.length - 1; j++) {
+      const bx = AVENUES[i] + half + 26;
+      const bw = AVENUES[i + 1] - half - 26 - bx;
+      const by = STREETS[j] + half + 26;
+      const bh = STREETS[j + 1] - half - 26 - by;
+      // Each block gets a 2x2 arrangement of lots with a small plaza gap.
+      const lotW = (bw - 18) / 2;
+      const lotH = (bh - 18) / 2;
+      for (let a = 0; a < 2; a++) {
+        for (let b = 0; b < 2; b++) {
+          if (rng.chance(0.12)) continue; // occasional empty lot / plaza
+          const w = lotW * rng.range(0.78, 0.97);
+          const h = lotH * rng.range(0.78, 0.97);
+          const x = bx + a * (lotW + 18) + (lotW - w) / 2;
+          const y = by + b * (lotH + 18) + (lotH - h) / 2;
+          if (!blockFree(x, y, w, h, keepOut)) continue;
+          buildings.push({
+            x, y, w, h,
+            color: rng.pick(ROOF_PAINTS),
+            floors: rng.int(2, 9),
+          });
         }
       }
     }
   }
 
-  // The gold Sunfire GT waits on a marked spot by the central intersection.
-  parkingSpots.push({ x: PLACES.goldCar.x, y: PLACES.goldCar.y, angle: 0, reserved: 'gold' });
-
-  // Palms down the beach, clear of the piers.
-  for (let y = 90; y < WORLD_H - 60; y += 105) {
-    const px = BEACH_X + randRange(rng, 26, 66);
-    const py = y + randRange(rng, -18, 18);
-    if (PIERS.some((p) => px > p.x - 30 && px < p.x + p.w + 30 && py > p.y - 34 && py < p.y + p.h + 34)) continue;
-    palms.push({ x: px, y: py, s: randRange(rng, 0.9, 1.35) });
-  }
-  // A few palms along the airstrip and the docks road.
-  for (let i = 0; i < 7; i++) {
-    palms.push({ x: randRange(rng, 2860, 3360), y: randRange(rng, 250, 268), s: randRange(rng, 0.8, 1.1) });
-  }
-
-  // Street props: lamps on intersection corners, hydrants on sidewalks.
-  for (const { x, y } of INTERSECTIONS) {
-    for (const [ox, oy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-      props.push({ kind: 'lamp', x: x + ox * (ROAD_W / 2 + 12), y: y + oy * (ROAD_W / 2 + 12) });
+  // Palms line the sidewalks and crowd the beach.
+  const palms = [];
+  for (const ax of AVENUES) {
+    for (let y = 90; y < WORLD_H - 60; y += 118) {
+      if (rng.chance(0.8)) palms.push({ x: ax - half - 16, y: y + rng.range(-14, 14) });
+      if (rng.chance(0.8)) palms.push({ x: ax + half + 16, y: y + rng.range(-14, 14) });
     }
   }
-  for (let i = 0; i < 26; i++) {
-    const vertical = rng() < 0.5;
-    if (vertical) {
-      props.push({ kind: 'hydrant', x: pick(rng, ROADS_X) + (rng() < 0.5 ? -1 : 1) * (ROAD_W / 2 + 13), y: randRange(rng, 60, WORLD_H - 60) });
-    } else {
-      props.push({ kind: 'hydrant', x: randRange(rng, 60, BEACH_X - 60), y: pick(rng, ROADS_Y) + (rng() < 0.5 ? -1 : 1) * (ROAD_W / 2 + 13) });
+  for (let y = 120; y < WORLD_H - 80; y += 96) {
+    palms.push({ x: BEACH_X + rng.range(6, 60), y });
+  }
+  // Palms are scenery only where they do not sit inside a building.
+  const clearPalms = palms.filter(
+    (p) => !buildings.some((b) => p.x > b.x - 8 && p.x < b.x + b.w + 8 && p.y > b.y - 8 && p.y < b.y + b.h + 8),
+  );
+
+  // Street props: lamps and hydrants along the avenues (visual dressing).
+  const props = [];
+  for (const ax of AVENUES) {
+    for (let y = 150; y < WORLD_H - 100; y += 210) {
+      props.push({ x: ax - half - 8, y, kind: 'lamp' });
+      props.push({ x: ax + half + 8, y: y + 105, kind: 'lamp' });
     }
   }
 
-  return { buildings, palms, props, parkingSpots, piers: PIERS, seed };
-}
+  // Parked cars hug the kerbs: alongside the avenues at mid-block, and
+  // alongside a few streets. Kerb spots are computed from the grid itself
+  // (just off the tarmac, clear of the building lots), so a parked car can
+  // never end up inside a building.
+  const kerb = half + 13;
+  const spotDefs = [
+    [AVENUES[0] - kerb, 520, Math.PI / 2],
+    [AVENUES[1] + kerb, 1640, Math.PI / 2],
+    [AVENUES[2] - kerb, 1080, Math.PI / 2],
+    [AVENUES[3] + kerb, 2200, Math.PI / 2],
+    [AVENUES[4] - kerb, 520, Math.PI / 2],
+    [AVENUES[5] + kerb, 1640, Math.PI / 2],
+    [AVENUES[6] - kerb, 1080, Math.PI / 2],
+    [960, STREETS[1] - kerb, 0],
+    [1920, STREETS[3] + kerb, 0],
+    [1440, STREETS[4] - kerb, 0],
+    [AVENUES[5] - kerb, 2760, Math.PI / 2],
+    [480, STREETS[2] + kerb, 0],
+  ];
+  const parkedSpots = [];
+  for (const [x, y, ang] of spotDefs) parkedSpots.push({ x, y, angle: ang });
 
-export function onPier(x, y) {
-  return PIERS.some((p) => x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h);
-}
-
-/** True when a circle at (x, y) with radius r hits a building, the water
- *  (off-pier) or the world edge. */
-export function circleBlocked(city, x, y, r) {
-  if (x < r || y < r || x > WORLD_W - r || y > WORLD_H - r) return true;
-  if (x > WATER_X - r && !onPier(x, y)) return true;
-  for (const b of city.buildings) {
-    if (x < b.x - r || x > b.x + b.w + r || y < b.y - r || y > b.y + b.h + r) continue;
-    const cx = clamp(x, b.x, b.x + b.w);
-    const cy = clamp(y, b.y, b.y + b.h);
-    const dx = x - cx;
-    const dy = y - cy;
-    if (dx * dx + dy * dy < r * r) return true;
+  // Intersection graph for traffic: nodes where avenues cross streets, each
+  // linked to its grid neighbours.
+  const nodes = [];
+  const nodeIndex = new Map();
+  for (let i = 0; i < AVENUES.length; i++) {
+    for (let j = 0; j < STREETS.length; j++) {
+      nodeIndex.set(i + ',' + j, nodes.length);
+      nodes.push({ x: AVENUES[i], y: STREETS[j], i, j, next: [] });
+    }
   }
+  for (const n of nodes) {
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (const [di, dj] of dirs) {
+      const key = (n.i + di) + ',' + (n.j + dj);
+      if (nodeIndex.has(key)) n.next.push(nodeIndex.get(key));
+    }
+  }
+
+  return {
+    width: WORLD_W,
+    height: WORLD_H,
+    avenues: AVENUES,
+    streets: STREETS,
+    roadW: ROAD_W,
+    buildings,
+    palms: clearPalms,
+    props,
+    parkedSpots,
+    places: PLACES,
+    bribeSpots: BRIBE_SPOTS,
+    nodes,
+  };
+}
+
+// Is a point on tarmac? Used for spawning and for keeping walkers sensible.
+export function onRoad(city, x, y) {
+  const half = city.roadW / 2 + 4;
+  for (const ax of city.avenues) if (Math.abs(x - ax) < half) return true;
+  for (const sy of city.streets) if (Math.abs(y - sy) < half) return true;
   return false;
 }
 
-/** The intersection nearest to a point (used to place police and traffic). */
-export function nearestIntersection(x, y) {
-  let best = INTERSECTIONS[0];
+// Nearest intersection node index to a point.
+export function nearestNode(city, x, y) {
+  let best = 0;
   let bestD = Infinity;
-  for (const p of INTERSECTIONS) {
-    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
-    if (d < bestD) { bestD = d; best = p; }
+  for (let i = 0; i < city.nodes.length; i++) {
+    const n = city.nodes[i];
+    const d = (n.x - x) * (n.x - x) + (n.y - y) * (n.y - y);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
   }
   return best;
 }

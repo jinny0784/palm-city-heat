@@ -1,183 +1,150 @@
-// main.js — browser bootstrap: wires input, simulation, rendering and
-// sound together, runs the title / pause / end-screen state machine, and
-// persists progress (cash, mission, story completion) in localStorage.
-// With ?shot=<name>&seed=<n> it instead stages one deterministic scene
-// for the entry screenshots and flags the page ready.
+// main.js — the browser bootstrap for Palm City Heat. It builds the world,
+// wires keyboard/mouse input and the synth audio to it, runs the fixed-feel
+// rAF loop (dt clamped so a stutter never teleports anyone), persists
+// progress to localStorage, and exposes a small debug hook at window.__palm.
+// Screenshot scenes (?shot=title|street|driving|chase&seed=N) freeze after a
+// short warm-up so the frame is deterministic.
 
-import { createWorld, stepWorld, startMission } from './world.js';
-import { createRenderer } from './render.js';
+import { createWorld, stepWorld, startPlay, resetRun } from './world.js';
 import { createInput } from './input.js';
-import { buildShotScene } from './shots.js';
-import { sfx, setEngine, setSiren, setMuted, isMuted } from './audio.js';
-import { SAVE_KEY, VIEW_W, VIEW_H, WORLD_W, WORLD_H } from './config.js';
-import { clamp } from './random.js';
+import { createAudio } from './audio.js';
+import { drawGame } from './render.js';
+import { setupShot } from './shots.js';
+import { VIEW_W, VIEW_H } from './config.js';
+
+const SAVE_KEY = 'palmCityHeatSaveV1';
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 
 const params = new URLSearchParams(window.location.search);
-const canvas = document.getElementById('game');
-const renderer = createRenderer(canvas);
-const input = createInput(canvas);
-
-const IDLE = {
-  moveX: 0, moveY: 0, sprint: false, fire: false, aim: 0,
-  interact: false, throttle: 0, steer: 0,
-};
+const shotName = params.get('shot');
+const seed = Number(params.get('seed') || 7) || 7;
+const WORLD_SEED = 20261119;
 
 function loadSave() {
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
     return raw ? JSON.parse(raw) : null;
-  } catch {
+  } catch (e) {
     return null;
   }
 }
 
-const shotName = params.get('shot');
-if (shotName) {
-  const seed = Number.parseInt(params.get('seed') || '7', 10) || 7;
-  const world = buildShotScene(shotName, seed);
+function storeSave(state) {
+  try {
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+      cash: state.player.cash,
+      missionIndex: state.mission.idx,
+      storyComplete: state.storyComplete,
+    }));
+  } catch (e) { /* private mode etc. — the game plays on without saving */ }
+}
+
+let saved = loadSave();
+let state = createWorld(shotsActive() ? seed : WORLD_SEED, saved);
+state.hasSave = !!saved;
+state.savedMission = saved ? saved.missionIndex : 0;
+
+const input = createInput(canvas);
+const audio = createAudio();
+let menuKey = '';
+
+function shotsActive() {
+  return !!shotName;
+}
+
+window.addEventListener('keydown', (e) => {
+  audio.unlock();
+  const k = e.key.toLowerCase();
+  if (k === 'enter' || k === 'c') menuKey = k;
+});
+canvas.addEventListener('mousedown', () => audio.unlock());
+
+if (shotsActive()) {
   document.body.classList.add('shot');
-  const ui = { mode: shotName === 'title' ? 'title' : 'play', saveExists: false, muted: false, overKind: null };
-  renderer.draw(world, ui);
-  window.__palm = { world, createWorld, stepWorld, buildShotScene };
-  requestAnimationFrame(() => {
-    renderer.draw(world, ui);
-    document.body.classList.add('shot-ready');
-  });
+  setupShot(state, shotName);
+  // Warm the scene up so traffic and walkers sit mid-stride, then freeze.
+  const idle = { x: 0, y: 0, aim: 0, fire: false, sprint: false, interact: false, pause: false, mute: false, confirm: false };
+  for (let i = 0; i < 45; i++) stepWorld(state, idle, 1 / 60);
+  state.sfx.length = 0;
+  drawGame(ctx, state);
+  window.__palm = { state, shot: shotName, ready: true };
 } else {
-  let world = createWorld(7);
-  let mode = 'title';
-  let overKind = null;
-  let saveExists = !!loadSave();
-  let saveT = 0;
-
-  window.__palm = {
-    get world() { return world; },
-    createWorld,
-    stepWorld,
-  };
-
-  function storeSave() {
-    try {
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        cash: world.player.cash,
-        missionIndex: world.missionIndex,
-        storyComplete: world.storyComplete,
-      }));
-      saveExists = true;
-    } catch {
-      /* storage unavailable: the run simply will not persist */
-    }
-  }
-
-  function freshWorld() {
-    return createWorld(((Math.random() * 90000) | 0) + 11);
-  }
-
-  function newGame() {
-    world = freshWorld();
-    mode = 'play';
-    overKind = null;
-    storeSave();
-  }
-
-  function continueGame() {
-    const save = loadSave();
-    world = freshWorld();
-    if (save) {
-      if (typeof save.cash === 'number') world.player.cash = save.cash;
-      if (save.storyComplete) {
-        world.storyComplete = true;
-        world.mission = null;
-        world.missionIndex = 5;
-      } else if (save.missionIndex >= 1 && save.missionIndex <= 4) {
-        startMission(world, save.missionIndex);
-      }
-    }
-    mode = 'play';
-    overKind = null;
-  }
-
-  function drainEvents() {
-    for (const e of world.events.splice(0)) {
-      const fn = sfx[e] || (e === 'wasted' || e === 'busted' ? sfx.fail : null);
-      if (fn) fn();
-    }
-  }
-
-  function buildSimInput() {
-    const axis = input.axis();
-    const p = world.player;
-    const camX = clamp(p.x, VIEW_W / 2, WORLD_W - VIEW_W / 2);
-    const camY = clamp(p.y, VIEW_H / 2, WORLD_H - VIEW_H / 2);
-    const aimX = camX + (input.mouse.x - VIEW_W / 2);
-    const aimY = camY + (input.mouse.y - VIEW_H / 2);
-    const inCar = !!p.inCar;
-    return {
-      moveX: axis.x,
-      moveY: axis.y,
-      sprint: input.down('ShiftLeft') || input.down('ShiftRight'),
-      fire: input.mouse.down || input.down('Space'),
-      aim: Math.atan2(aimY - p.y, aimX - p.x),
-      interact: input.pressed('KeyE'),
-      throttle: inCar ? (axis.y < 0 ? 1 : axis.y > 0 ? -1 : 0) : 0,
-      steer: inCar ? axis.x : 0,
-    };
-  }
-
+  window.__palm = { state, createWorld, stepWorld, startPlay };
   let last = performance.now();
+  let started = false;
+
   function frame(now) {
     requestAnimationFrame(frame);
-    const dt = Math.min((now - last) / 1000, 1 / 20);
+    let dt = (now - last) / 1000;
     last = now;
-    if (input.pressed('KeyM')) setMuted(!isMuted());
+    if (dt > 0.05) dt = 0.05;
+    if (dt <= 0) return;
 
-    if (mode === 'title') {
-      stepWorld(world, IDLE, dt);
-      world.events.length = 0;
-      if (input.pressed('Enter')) newGame();
-      else if (saveExists && input.pressed('KeyC')) continueGame();
-    } else if (mode === 'play') {
-      if (input.pressed('Escape') || input.pressed('KeyP')) {
-        mode = 'pause';
+    // Aim from the mouse through the camera the renderer last used.
+    const cam = state._cam || { x: 0, y: 0 };
+    const aim = Math.atan2(
+      (cam.y + input.mouse.y) - state.player.y,
+      (cam.x + input.mouse.x) - state.player.x,
+    );
+    const frameInput = input.read(aim);
+    state.muted = audio.isMuted();
+    if (frameInput.mute) audio.toggleMute();
+
+    if (state.mode === 'title') {
+      stepWorld(state, frameInput, dt);
+      if (menuKey === 'enter') {
+        // Fresh run: wipe progress and rebuild the world clean.
+        try { window.localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ }
+        saved = null;
+        state = createWorld(WORLD_SEED, null);
+        state.hasSave = false;
+        window.__palm.state = state;
+        startPlay(state);
+        started = true;
+      } else if (menuKey === 'c' && saved) {
+        startPlay(state);
+        started = true;
+      }
+      menuKey = '';
+    } else if (state.mode === 'playing') {
+      if (frameInput.pause) {
+        state.mode = 'paused';
       } else {
-        stepWorld(world, buildSimInput(), dt);
-        drainEvents();
-        if (world.over) {
-          mode = 'over';
-          overKind = world.over;
-          setEngine(false, 0);
-          setSiren(false);
-          storeSave();
-        }
-        saveT += dt;
-        if (saveT > 4) {
-          saveT = 0;
-          storeSave();
-        }
+        stepWorld(state, frameInput, dt);
       }
-    } else if (mode === 'pause') {
-      if (input.pressed('Escape') || input.pressed('KeyP')) mode = 'play';
-    } else if (mode === 'over') {
-      if (overKind === 'complete' && input.pressed('KeyC')) {
-        world.over = null;
-        mode = 'play';
-      } else if (input.pressed('Enter')) {
-        try { window.localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
-        newGame();
+    } else if (state.mode === 'paused') {
+      if (frameInput.pause || frameInput.confirm) state.mode = 'playing';
+    } else if (state.mode === 'busted' || state.mode === 'wasted' || state.mode === 'complete') {
+      if (menuKey === 'enter' || frameInput.confirm) {
+        resetRun(state);
       }
+      menuKey = '';
     }
 
-    if (mode === 'play') {
-      const p = world.player;
-      setEngine(!!p.inCar, p.inCar ? Math.abs(p.inCar.speed) / 430 : 0);
-      const policeNear = world.cars.some(
-        (c) => c.kind === 'police' && !c.dead && (c.x - p.x) ** 2 + (c.y - p.y) ** 2 < 560 * 560,
-      );
-      setSiren(policeNear && world.wanted.heat >= 2);
+    if (state.saveDirty) {
+      state.saveDirty = false;
+      saved = { cash: state.player.cash, missionIndex: state.mission.idx, storyComplete: state.storyComplete };
+      storeSave(state);
+      state.hasSave = true;
+      state.savedMission = state.mission.idx;
     }
 
-    renderer.draw(world, { mode, overKind, saveExists, muted: isMuted() });
-    input.postFrame();
+    // Sound: drain one-shots, then set the loops from the live state.
+    for (const s of state.sfx) audio.play(s);
+    state.sfx.length = 0;
+    const car = state.player.carId ? state.cars.find((c) => c.id === state.player.carId) : null;
+    const driving = !!car && state.mode === 'playing';
+    audio.setEngine(driving, car ? Math.abs(car.speed) / 340 : 0);
+    const chaseNear = state.cars.some((c) => c.driver === 'police' &&
+      Math.hypot(c.x - state.player.x, c.y - state.player.y) < 720);
+    audio.setSiren(chaseNear && state.mode === 'playing');
+
+    drawGame(ctx, state);
+    void started;
   }
   requestAnimationFrame(frame);
 }
+
+void VIEW_W;
+void VIEW_H;

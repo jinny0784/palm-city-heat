@@ -1,93 +1,93 @@
-// shots.js — deterministic staged scenes for the entry screenshots.
-// Each scene builds a fresh world from the seed, scripts a few seconds of
-// simulation, and leaves it frozen in a photogenic state. Same seed and
-// same script always produce the same frame.
+// shots.js — deterministic staged scenes for the entry screenshots. Each
+// scene arranges a fresh world into a clean, readable 1280x800 frame: the
+// title over the living city, the player on foot at a mission start, a drive
+// down the avenue, and a police chase in full swing. Used via
+// game/index.html?shot=<name>&seed=<n>; also handy for manual QA.
 
-import { createWorld, stepWorld, enterCar, addHeat } from './world.js';
+import { startMission } from './world.js';
+import { HEAT_PER_STAR } from './config.js';
 
-const IDLE = {
-  moveX: 0, moveY: 0, sprint: false, fire: false, aim: 0,
-  interact: false, throttle: 0, steer: 0,
-};
-
-function run(world, input, seconds) {
-  const steps = Math.round(seconds * 30);
-  for (let i = 0; i < steps; i++) stepWorld(world, input, 1 / 30);
-}
-
-function nearestCar(world, kind) {
-  let best = null;
-  let bestD = Infinity;
-  for (const car of world.cars) {
-    if (car.kind !== kind || car.dead) continue;
-    const d = (car.x - world.player.x) ** 2 + (car.y - world.player.y) ** 2;
-    if (d < bestD) { bestD = d; best = car; }
-  }
-  return best;
-}
-
-/** Put the player in a car, placed on the eastbound lane of the avenue
- *  (road y = 900, lane centre y = 932) heading east. */
-function stageCarOnAvenue(world, x) {
-  const car = nearestCar(world, 'parked') || nearestCar(world, 'traffic');
-  if (!car) return null;
+function placeInCar(state, car, x, y, angle, speed) {
   car.x = x;
-  car.y = 932;
-  car.angle = 0;
-  car.speed = 0;
-  world.player.x = x;
-  world.player.y = 932;
-  enterCar(world, car);
-  return car;
+  car.y = y;
+  car.angle = angle;
+  car.speed = speed;
+  car.driver = 'player';
+  state.player.carId = car.id;
+  state.player.x = x;
+  state.player.y = y;
+  state.player.angle = angle;
 }
 
-export function buildShotScene(name, seed) {
-  const world = createWorld(seed);
+function trafficCars(state) {
+  return state.cars.filter((c) => c.driver === 'traffic');
+}
+
+export function setupShot(state, name) {
+  state.toasts = [];
   if (name === 'title') {
-    // A scenic central intersection, traffic rolling through.
-    world.shotCam = { x: 1560, y: 1500 };
-    run(world, IDLE, 2.5);
-  } else if (name === 'street') {
-    // On foot downtown, Mara's first job on the banner, city alive.
-    world.player.x = 1015;
-    world.player.y = 985;
-    run(world, IDLE, 2);
-  } else if (name === 'driving') {
-    // Rolling east down the avenue with a traffic car ahead in the lane.
-    stageCarOnAvenue(world, 1060);
-    const traffic = world.cars.find((c) => c.kind === 'traffic');
-    if (traffic) {
-      traffic.x = 1750;
-      traffic.y = 932;
-      traffic.angle = 0;
-      traffic.speed = 150;
-      traffic.ai = { road: 'h', line: 900, dir: 0, tx: 2180, ty: 932 };
-    }
-    run(world, { ...IDLE, throttle: 1 }, 1.4);
-    run(world, { ...IDLE, throttle: 0.55 }, 0.4);
-  } else if (name === 'chase') {
-    // Three stars, throttle down — then two interceptors staged onto the
-    // player's tail so the pursuit is in frame when it freezes.
-    stageCarOnAvenue(world, 760);
-    addHeat(world, 3.2);
-    run(world, { ...IDLE, throttle: 1 }, 2.2);
-    const mine = world.player.inCar;
-    const cops = world.cars.filter((c) => c.kind === 'police' && !c.dead);
-    if (mine && cops.length > 0) {
-      const ca = Math.cos(mine.angle);
-      const sa = Math.sin(mine.angle);
-      cops[0].x = mine.x - ca * 128 - sa * 27;
-      cops[0].y = mine.y - sa * 128 + ca * 27;
-      cops[0].angle = mine.angle;
-      cops[0].speed = Math.abs(mine.speed);
-      if (cops[1]) {
-        cops[1].x = mine.x - ca * 225 + sa * 30;
-        cops[1].y = mine.y - sa * 225 - ca * 30;
-        cops[1].angle = mine.angle;
-        cops[1].speed = Math.abs(mine.speed);
+    state.mode = 'title';
+    // Hover the camera over the heart of the city, with the player's ride
+    // waiting on the street below the wordmark.
+    state.camera = { x: 1900, y: 1250 };
+    const ride = state.cars.find((c) => c.driver === 'parked' && c.kind === 'sedan') || state.cars[0];
+    placeInCar(state, ride, 1850, 1384, 0, 0);
+    return;
+  }
+  state.mode = 'playing';
+  state.stats.startedAt = 0;
+  startMission(state, 0);
+  state.toasts = state.toasts.slice(-1); // keep Mara's first call on screen
+
+  if (name === 'street') {
+    // On foot on the sidewalk corner where the game begins; traffic rolls
+    // past in the correct lanes and the docks objective sits on the banner.
+    state.player.x = 1118;
+    state.player.y = 750;
+    state.player.angle = -0.5;
+    const traffic = trafficCars(state);
+    if (traffic[0]) { traffic[0].x = 1560; traffic[0].y = 776; traffic[0].angle = Math.PI; traffic[0].speed = 130; }
+    if (traffic[1]) { traffic[1].x = 1830; traffic[1].y = 776; traffic[1].angle = Math.PI; traffic[1].speed = 130; }
+    if (traffic[2]) { traffic[2].x = 1290; traffic[2].y = 824; traffic[2].angle = 0; traffic[2].speed = 130; }
+    return;
+  }
+
+  if (name === 'driving' || name === 'chase') {
+    // Behind the wheel on the big east-west street, west of the avenue
+    // crossing so the road ahead reads clean.
+    const car = state.cars.find((c) => c.driver === 'parked' && c.kind === 'sedan') || state.cars[0];
+    placeInCar(state, car, 1250, 1384, 0, 235);
+    const traffic = trafficCars(state);
+    if (traffic[0]) { traffic[0].x = 1980; traffic[0].y = 1384; traffic[0].angle = 0; traffic[0].speed = 150; }
+    if (traffic[1]) { traffic[1].x = 2290; traffic[1].y = 1384; traffic[1].angle = 0; traffic[1].speed = 150; }
+    if (traffic[2]) { traffic[2].x = 2060; traffic[2].y = 1336; traffic[2].angle = Math.PI; traffic[2].speed = 150; }
+    if (name === 'chase') {
+      state.heat = 3 * HEAT_PER_STAR;
+      state.player.hp = 82;
+      // Two interceptors right on the player's tail, converted from traffic.
+      if (traffic[3]) {
+        traffic[3].kind = 'police';
+        traffic[3].color = '#22303c';
+        traffic[3].driver = 'police';
+        traffic[3].x = 1085;
+        traffic[3].y = 1340;
+        traffic[3].angle = 0;
+        traffic[3].speed = 255;
+      }
+      if (traffic[4]) {
+        traffic[4].kind = 'police';
+        traffic[4].color = '#22303c';
+        traffic[4].driver = 'police';
+        traffic[4].x = 985;
+        traffic[4].y = 1428;
+        traffic[4].angle = 0;
+        traffic[4].speed = 255;
       }
     }
-    run(world, { ...IDLE, throttle: 0.8 }, 0.45);
+    return;
   }
-  return world;
+
+  // Unknown scene name: fall back to the street frame.
+  state.player.x = 1118;
+  state.player.y = 750;
 }

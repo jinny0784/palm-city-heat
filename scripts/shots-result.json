@@ -1,26 +1,22 @@
 [
   {
-    "name": "title",
+    "scene": "title",
     "file": "screenshots/1-title.jpg",
-    "bytes": 90566,
-    "quality": 84
+    "bytes": 90475
   },
   {
-    "name": "street",
+    "scene": "street",
     "file": "screenshots/2-street.jpg",
-    "bytes": 96705,
-    "quality": 84
+    "bytes": 108296
   },
   {
-    "name": "driving",
+    "scene": "driving",
     "file": "screenshots/3-driving.jpg",
-    "bytes": 90171,
-    "quality": 84
+    "bytes": 107543
   },
   {
-    "name": "chase",
+    "scene": "chase",
     "file": "screenshots/4-chase.jpg",
-    "bytes": 92654,
-    "quality": 84
+    "bytes": 109191
   }
 ]

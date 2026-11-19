@@ -1,65 +1,59 @@
-// input.js — keyboard and mouse state for the game. Tracks held keys,
-// one-frame "pressed" edges, and the mouse position over the canvas.
-
-const GAME_KEYS = new Set([
-  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyM', 'KeyP', 'KeyC', 'Space',
-  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight',
-  'Enter', 'Escape',
-]);
+// input.js — keyboard and mouse state for the game loop. The world wants a
+// simple per-frame snapshot: movement axes, an aim angle (computed by
+// main.js from the mouse position and camera), whether the trigger is held,
+// and edge-triggered presses for interact / pause / mute / confirm.
 
 export function createInput(canvas) {
-  const held = new Set();
-  const edges = new Set();
+  const keys = new Set();
+  const pressed = new Set(); // keys that went down since the last frame read
   const mouse = { x: 0, y: 0, down: false };
 
-  window.addEventListener('keydown', (e) => {
-    if (GAME_KEYS.has(e.code)) e.preventDefault();
-    if (!e.repeat) edges.add(e.code);
-    held.add(e.code);
-  });
-  window.addEventListener('keyup', (e) => {
-    held.delete(e.code);
-  });
-  window.addEventListener('blur', () => {
-    held.clear();
-    mouse.down = false;
-  });
-  canvas.addEventListener('mousemove', (e) => {
+  function onKeyDown(e) {
+    const k = e.key.toLowerCase();
+    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+    if (!keys.has(k)) pressed.add(k);
+    keys.add(k);
+  }
+  function onKeyUp(e) {
+    keys.delete(e.key.toLowerCase());
+  }
+  function onMouseMove(e) {
     const rect = canvas.getBoundingClientRect();
-    mouse.x = ((e.clientX - rect.left) / rect.width) * canvas.width;
-    mouse.y = ((e.clientY - rect.top) / rect.height) * canvas.height;
-  });
-  canvas.addEventListener('mousedown', (e) => {
+    mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+  }
+  function onMouseDown(e) {
     if (e.button === 0) mouse.down = true;
-  });
-  window.addEventListener('mouseup', (e) => {
+  }
+  function onMouseUp(e) {
     if (e.button === 0) mouse.down = false;
-  });
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
 
-  return {
-    mouse,
-    down: (code) => held.has(code),
-    /** True only on the frame the key went down; consumes the edge. */
-    pressed(code) {
-      if (edges.has(code)) {
-        edges.delete(code);
-        return true;
-      }
-      return false;
-    },
-    /** Call at the end of each frame to drop stale edges. */
-    postFrame() {
-      edges.clear();
-    },
-    axis() {
-      let x = 0;
-      let y = 0;
-      if (held.has('KeyA') || held.has('ArrowLeft')) x -= 1;
-      if (held.has('KeyD') || held.has('ArrowRight')) x += 1;
-      if (held.has('KeyW') || held.has('ArrowUp')) y -= 1;
-      if (held.has('KeyS') || held.has('ArrowDown')) y += 1;
-      return { x, y };
-    },
-  };
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('mousedown', onMouseDown);
+  window.addEventListener('mouseup', onMouseUp);
+
+  // Read one frame of input. aimAngle is supplied by the caller, which knows
+  // where the camera is. Consumes the edge-triggered press set.
+  function read(aimAngle) {
+    const x = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+    const y = (keys.has('s') || keys.has('arrowdown') ? 1 : 0) - (keys.has('w') || keys.has('arrowup') ? 1 : 0);
+    const frame = {
+      x,
+      y,
+      aim: aimAngle,
+      fire: mouse.down || keys.has(' '),
+      sprint: keys.has('shift'),
+      interact: pressed.has('e'),
+      pause: pressed.has('escape') || pressed.has('p'),
+      mute: pressed.has('m'),
+      confirm: pressed.has('enter') || pressed.has(' '),
+    };
+    pressed.clear();
+    return frame;
+  }
+
+  return { read, mouse };
 }
