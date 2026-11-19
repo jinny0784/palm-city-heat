@@ -1,55 +1,82 @@
-// Generate the 4 staged screenshots from shots.json with chrome-headless-shell.
-// Serves game/ locally, screenshots each ?shot= URL at 1280x800, converts to
-// JPEG q80 and checks the size caps. Run via the palmshots systemd unit (Chromium
-// crashes in the exec sandbox); writes shots-result.json next to this script.
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+// Palm City Heat — renders the four screenshots in shots.json from the
+// real game in headless Chrome and writes them into screenshots/ as
+// 1280x800 JPEGs of at most 256 KiB each. Run: node scripts/shots.mjs
+// (in this workspace Chrome must be launched from a systemd service;
+// see the unit the build used — the script itself is environment-blind).
+
+import { createServer } from 'node:http';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { extname, join, normalize } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import puppeteer from '/home/hatch/workspace/makefun-best-game/playtest/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js';
 
-const CHROME = '/home/hatch/.cache/puppeteer/chrome-headless-shell/linux-154.0.8037.57/chrome-headless-shell-linux64/chrome-headless-shell';
-const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
-const shots = JSON.parse(readFileSync(join(repo, 'shots.json'), 'utf8'));
-const outDir = join(repo, 'screenshots');
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const PORT = 8137;
+const MAX_BYTES = 262144;
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const server = spawn('node', ['serve.ts', '--port', '8126'], { cwd: repo, stdio: 'ignore' });
-await sleep(1500);
-
-const results = [];
-for (const shot of shots) {
-  const png = join(outDir, shot.name.replace(/\.jpe?g$/, '.png'));
-  const jpg = join(outDir, shot.name);
-  const url = `http://localhost:8126/${shot.query}`;
-  const shotRun = spawnSync(CHROME, [
-    '--headless', '--disable-gpu', '--no-sandbox', '--hide-scrollbars',
-    `--window-size=1280,800`, '--virtual-time-budget=9000',
-    `--screenshot=${png}`, url,
-  ], { encoding: 'utf8', timeout: 120000 });
-  let ok = shotRun.status === 0 && existsSync(png);
-  let size = 0;
-  if (ok) {
-    const conv = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', png, '-q:v', '4', jpg], { encoding: 'utf8' });
-    ok = conv.status === 0 && existsSync(jpg);
-    if (ok) {
-      const probe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-show_entries', 'format=size', '-of', 'json', jpg], { encoding: 'utf8' });
-      const info = JSON.parse(probe.stdout || '{}');
-      size = Number(info.format?.size || 0);
-      const w = Number(info.streams?.[0]?.width || 0);
-      const h = Number(info.streams?.[0]?.height || 0);
-      ok = w === 1280 && h === 800 && size <= 262144 && size > 10000;
-      results.push({ shot: shot.name, ok, width: w, height: h, bytes: size, note: shotRun.stderr?.slice(0, 200) || '' });
-    } else {
-      results.push({ shot: shot.name, ok: false, bytes: 0, note: `ffmpeg failed: ${(conv.stderr || '').slice(0, 200)}` });
-    }
-  } else {
-    results.push({ shot: shot.name, ok: false, bytes: 0, note: `chrome failed: ${(shotRun.stderr || '').slice(0, 300)}` });
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png' };
+const server = createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+    let path = decodeURIComponent(url.pathname);
+    if (path.endsWith('/')) path += 'index.html';
+    const file = normalize(join(root, path));
+    if (!file.startsWith(root)) { res.writeHead(403); res.end(); return; }
+    const body = readFileSync(file);
+    res.writeHead(200, { 'Content-Type': TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream' });
+    res.end(body);
+  } catch {
+    res.writeHead(404);
+    res.end('not found');
   }
-  console.log(JSON.stringify(results[results.length - 1]));
+});
+
+function chromePath() {
+  const base = '/home/hatch/.cache/puppeteer/chrome-headless-shell';
+  const versions = readdirSync(base).sort();
+  for (let i = versions.length - 1; i >= 0; i -= 1) {
+    const p = join(base, versions[i], 'chrome-headless-shell-linux64', 'chrome-headless-shell');
+    if (existsSync(p)) return p;
+  }
+  throw new Error('no chrome-headless-shell found');
 }
-server.kill();
-writeFileSync(join(repo, 'scripts', 'shots-result.json'), JSON.stringify(results, null, 2));
-const allOk = results.every((r) => r.ok);
-console.log(allOk ? 'ALL SHOTS OK' : 'SOME SHOTS FAILED');
-process.exit(allOk ? 0 : 1);
+
+const shots = JSON.parse(readFileSync(join(root, 'shots.json'), 'utf8')).shots;
+const results = [];
+
+await new Promise((resolve) => server.listen(PORT, resolve));
+const browser = await puppeteer.launch({
+  executablePath: chromePath(),
+  args: ['--no-sandbox', '--disable-dev-shm-usage', '--force-device-scale-factor=1'],
+});
+try {
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 800 });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  for (const shot of shots) {
+    const url = `http://localhost:${PORT}/${shot.url}`;
+    await page.goto(url, { waitUntil: 'load', timeout: 60000 });
+    await page.waitForFunction(() => window.__shotReady === true, { timeout: 60000 });
+    let quality = 88;
+    let buffer = await page.screenshot({ type: 'jpeg', quality });
+    while (buffer.length > MAX_BYTES && quality > 40) {
+      quality -= 6;
+      buffer = await page.screenshot({ type: 'jpeg', quality });
+    }
+    const out = join(root, shot.file);
+    writeFileSync(out, buffer);
+    const size = statSync(out).size;
+    results.push({ name: shot.name, file: shot.file, bytes: size, quality });
+    console.log(`${shot.name}: ${shot.file} — ${size} bytes (jpeg q${quality})`);
+    if (size > MAX_BYTES) throw new Error(`${shot.file} is ${size} bytes, over the ${MAX_BYTES} cap`);
+  }
+  if (errors.length) console.log('page errors seen:', errors);
+} finally {
+  await browser.close();
+  server.close();
+}
+writeFileSync(join(root, 'scripts', 'shots-result.json'), JSON.stringify(results, null, 2));
+console.log('done:', results.length, 'screenshots');

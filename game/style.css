@@ -1,6 +1,63 @@
-html, body { margin: 0; height: 100%; overflow: hidden; background: #0e2a33; }
-#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
-/* Read aloud, never shown: the status line screen readers announce. */
-#status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-/* Screenshot mode: a clean full-canvas frame, no page chrome. */
-body.shot { cursor: default; }
+/* Palm City Heat — page chrome. The game itself is all canvas. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  background: linear-gradient(160deg, #2b1030 0%, #571f3d 46%, #b3402a 78%, #e2703a 100%);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #ffe9c9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wrap {
+  padding: 22px 12px 14px;
+  text-align: center;
+}
+
+canvas#game {
+  width: min(1280px, 97vw);
+  height: auto;
+  aspect-ratio: 1280 / 800;
+  background: #79b657;
+  border-radius: 10px;
+  box-shadow: 0 24px 70px rgba(10, 0, 18, 0.55), 0 4px 18px rgba(10, 0, 18, 0.4);
+  cursor: crosshair;
+}
+
+.hint {
+  margin: 12px 0 0;
+  font-size: 13.5px;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+}
+
+/* Screenshot mode: the bare frame, nothing else. */
+body.shot {
+  background: #000;
+  display: block;
+}
+
+body.shot .wrap {
+  padding: 0;
+}
+
+body.shot canvas#game {
+  width: 1280px;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+body.shot .hint {
+  display: none;
+}

@@ -1,246 +1,190 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed
-// 1/60 s steps (several in a slow frame, none in a fast one), and the renderer
-// paints what is there. The game moves between six screens: title, play, paused,
-// wasted, busted and story-complete. Progress (cash, mission, story flag) is saved
-// to localStorage; the title screen offers Continue when a save exists.
-//
-// ?seed=N fixes the city and every spawn. ?shot=title|street|driving|chase
-// (with &seed=N) stages that scene instead of running the loop, paints it twice
-// and sets window.__shotReady for a screenshot.
-import { SAVE_KEY, STEP } from './config.js';
+// Palm City Heat — the browser shell. It owns the canvas, the clock, the
+// title / play / game-over flow, the save in localStorage, and the sound
+// wiring. All simulation lives in world.js; this file only feeds it input
+// and draws what it holds. With ?shot=<name>&seed=<n> it renders one
+// staged frame instead, for the screenshots.
+
 import { createRandom } from './random.js';
-import { createWorld, EVENT_BUSTED, EVENT_CRASH, EVENT_FAIL, EVENT_HIT, EVENT_MISSION_DONE, EVENT_PICKUP, EVENT_SHOT, EVENT_STORY, EVENT_WASTED } from './world.js';
-import { ACTION_CONFIRM, ACTION_ENTER, ACTION_MUTE, ACTION_PAUSE, ACTION_RELOAD, createInput } from './input.js';
+import { createWorld } from './world.js';
 import { createAudio } from './audio.js';
-import { createRenderer, SCREEN_BUSTED, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_STORY, SCREEN_TITLE, SCREEN_WASTED } from './render.js';
+import { createInput } from './input.js';
+import { drawHUD, drawOver, drawPaused, drawTitle, drawWorld, titleButtons } from './render.js';
 import { stageShot } from './shots.js';
-
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
-const MAX_FRAME = 0.25;
-
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
+import { SAVE_KEY, STEP, VIEW_H, VIEW_W, WORLD } from './config.js';
 
 const canvas = document.getElementById('game');
-const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
-const renderer = createRenderer(canvas);
-const audio = createAudio();
-// Debug hook for play-tests: the real world, live.
-window.__palm = { world, seed };
+const ctx = canvas.getContext('2d');
+const params = new URLSearchParams(location.search);
+const shotName = params.get('shot');
 
-function readSave() {
+const audio = createAudio();
+
+function loadSave() {
   try {
-    const raw = window.localStorage.getItem(SAVE_KEY);
-    if (!raw) return null;
-    const save = JSON.parse(raw);
-    if (!save || typeof save !== 'object') return null;
-    return save;
+    const raw = localStorage.getItem(SAVE_KEY);
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
 
-function writeSave() {
+function storeSave(world) {
   try {
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(world.saveData()));
+    localStorage.setItem(SAVE_KEY, JSON.stringify(world.saveData()));
   } catch {
-    // Storage can be off (private windows): progress then lasts this visit only.
+    // Private mode or a full store: the game plays on without saving.
   }
 }
 
-function runShot(name) {
-  const scene = stageShot(name, world);
-  let painted = 0;
-  function paint() {
-    renderer.draw(world, scene.screen, { hasSave: false, muted: false });
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
+// ------------------------------------------------------------ shot mode
+
+if (shotName) {
+  document.body.classList.add('shot');
+  const seed = parseInt(params.get('seed') || '7', 10) || 7;
+  const { world, camCenter } = stageShot(shotName, seed);
+  window.__palm = { world, seed };
+  const cam = {
+    x: Math.max(0, Math.min(WORLD.width - VIEW_W, camCenter.x - VIEW_W / 2)),
+    y: Math.max(0, Math.min(WORLD.height - VIEW_H, camCenter.y - VIEW_H / 2)),
+  };
+  let frames = 0;
+  const renderFrame = () => {
+    if (shotName === 'title') drawTitle(ctx, world, cam, false, null);
+    else {
+      drawWorld(ctx, world, cam);
+      drawHUD(ctx, world, {});
+    }
+    frames += 1;
+    if (frames < 3) requestAnimationFrame(renderFrame);
     else window.__shotReady = true;
-  }
-  requestAnimationFrame(paint);
-}
-
-function runGame() {
-  const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let save = readSave();
+  };
+  requestAnimationFrame(renderFrame);
+} else {
+  // ------------------------------------------------------------ live game
+  let mode = 'title'; // title | play | over
+  let paused = false;
+  let world = createWorld(createRandom((Date.now() % 90000) + 11));
+  window.__palm = { world, seed: 0 };
+  let save = loadSave();
+  let overTimer = 0;
   let saveTimer = 0;
-  let newGameKey = false;
-  // One-shot presses handleActions drains each frame; step() takes them from here
-  // (a fixed step may run more than once per frame, so they are spent once).
-  let pendingEnter = false;
-  let pendingReload = false;
-  let accumulator = 0;
-  let last = performance.now();
 
-  window.addEventListener('keydown', (event) => {
-    if (event.code === 'KeyN' && !event.repeat) newGameKey = true;
+  const input = createInput(canvas, {
+    onAnyKey: () => audio.unlock(),
+    onPause: () => {
+      if (mode === 'play') paused = !paused;
+    },
+    onMute: () => audio.toggleMute(),
+    onEnter: () => {
+      if (mode === 'over') toTitle();
+    },
+    onClick: (x, y) => {
+      if (mode !== 'title') return;
+      for (const b of titleButtons(!!save)) {
+        if (x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) {
+          audio.play('click');
+          startGame(b.id === 'continue' ? save : null);
+        }
+      }
+    },
   });
 
-  function announce(message) {
-    status.textContent = message;
+  function toTitle() {
+    mode = 'title';
+    paused = false;
+    world = createWorld(createRandom((Date.now() % 90000) + 11));
+    window.__palm = { world, seed: 0 };
+    save = loadSave();
   }
 
-  function startGame(fromSave) {
-    world.reset();
-    if (fromSave && save) world.applySave(save);
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    audio.unlock();
-    announce(fromSave ? 'Continuing your story in Palm City.' : 'Playing Palm City Heat.');
+  function startGame(savedRun) {
+    world = createWorld(createRandom((Date.now() % 90000) + 11));
+    if (savedRun) world.applySave(savedRun);
+    window.__palm = { world, seed: 0 };
+    mode = 'play';
+    paused = false;
+    overTimer = 0;
   }
 
-  function endTo(next) {
-    screen = next;
-    writeSave();
-    if (next === SCREEN_WASTED) announce('Wasted. Press Space to try again.');
-    else if (next === SCREEN_BUSTED) announce('Busted. Press Space to try again.');
-    else if (next === SCREEN_STORY) announce('Story complete. Press Space to keep playing in free roam.');
-  }
-
-  function cameraFor() {
-    const pp = world.playerPos();
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+  function cameraFor(target) {
+    const shake = world.state.shake;
+    const sx = shake > 0.1 ? (Math.random() * 2 - 1) * shake : 0;
+    const sy = shake > 0.1 ? (Math.random() * 2 - 1) * shake : 0;
     return {
-      x: Math.max(vw / 2, Math.min(4000 - vw / 2, pp.x)),
-      y: Math.max(vh / 2, Math.min(3000 - vh / 2, pp.y)),
+      x: Math.max(0, Math.min(WORLD.width - VIEW_W, target.x - VIEW_W / 2 + sx)),
+      y: Math.max(0, Math.min(WORLD.height - VIEW_H, target.y - VIEW_H / 2 + sy)),
     };
   }
 
-  function buildInput() {
-    const move = input.move();
-    const aim = input.aim();
-    const cam = cameraFor();
-    const inCar = !!world.player.inCar;
-    return {
-      mx: move.mx,
-      my: move.my,
-      sprint: input.sprint(),
-      handbrake: inCar && input.space(),
-      enterPressed: false,
-      reloadPressed: false,
-      fire: !inCar && (input.mouseDown() || input.space()),
-      aimX: aim.x + cam.x - window.innerWidth / 2,
-      aimY: aim.y + cam.y - window.innerHeight / 2,
-    };
-  }
-
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_MUTE) {
-      const muted = audio.toggleMute();
-      announce(muted ? 'Muted.' : 'Sound on.');
-    }
-    pendingEnter = !!(actions & ACTION_ENTER);
-    pendingReload = !!(actions & ACTION_RELOAD);
-    if (screen === SCREEN_TITLE) {
-      if (actions & ACTION_CONFIRM) startGame(!!save);
-      else if (newGameKey && save) {
-        save = null;
-        startGame(false);
-      }
-      newGameKey = false;
-      return;
-    }
-    newGameKey = false;
-    if (screen === SCREEN_PLAY && (actions & ACTION_PAUSE)) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-      return;
-    }
-    if (screen === SCREEN_PAUSED && (actions & (ACTION_PAUSE | ACTION_CONFIRM))) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-      return;
-    }
-    if ((screen === SCREEN_WASTED || screen === SCREEN_BUSTED || screen === SCREEN_STORY) && (actions & ACTION_CONFIRM)) {
-      if (screen === SCREEN_STORY) {
-        // Keep playing in free roam with the story done.
-        screen = SCREEN_PLAY;
-        announce('Free roam. The city is yours.');
-      } else {
-        startGame(!!save);
-      }
-    }
-  }
-
-  function react(events) {
-    if (events & EVENT_SHOT) audio.shoot();
-    if (events & EVENT_HIT) audio.hit();
-    if (events & EVENT_PICKUP) audio.pickup();
-    if (events & EVENT_CRASH) audio.crash(0.6);
-    if (events & EVENT_MISSION_DONE) {
-      audio.jingle();
-      writeSave();
-    }
-    if (events & EVENT_FAIL) audio.fail();
-    if (events & EVENT_WASTED) endTo(SCREEN_WASTED);
-    if (events & EVENT_BUSTED) endTo(SCREEN_BUSTED);
-    if (events & EVENT_STORY) endTo(SCREEN_STORY);
-  }
-
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, { mx: 0, my: 0, sprint: false, handbrake: false, enterPressed: false, reloadPressed: false, fire: false, aimX: 0, aimY: 0 }, true);
-      return;
-    }
-    const built = buildInput();
-    built.enterPressed = pendingEnter;
-    built.reloadPressed = pendingReload;
-    pendingEnter = false;
-    pendingReload = false;
-    const events = world.step(STEP, built, false);
-    react(events);
-    // Engine hum + siren follow the live state, not events.
-    const car = world.player.inCar;
-    const speedNorm = car ? Math.min(1, Math.hypot(car.vx, car.vy) / 520) : 0;
-    audio.engine(speedNorm, !!car);
-    let policeNear = false;
-    if (world.state.wanted >= 2) {
-      const pp = world.playerPos();
-      for (const c of world.cars) {
-        if (c.driver === 'police' && Math.hypot(c.x - pp.x, c.y - pp.y) < 700) { policeNear = true; break; }
-      }
-    }
-    audio.siren(policeNear);
-    saveTimer += STEP;
-    if (saveTimer >= 5) {
-      saveTimer = 0;
-      writeSave();
-    }
-  }
-
+  let last = performance.now();
+  let acc = 0;
+  let titleCamX = 1500;
   function frame(now) {
     requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
+    let dt = (now - last) / 1000;
     last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
-        accumulator -= STEP;
+    if (dt > 0.25) dt = 0.25;
+
+    if (mode === 'title') {
+      // The city lives behind the title: traffic flows, nobody is wanted.
+      acc += dt;
+      while (acc > STEP) {
+        world.step(STEP, { mx: 0, my: 0, fire: false });
+        acc -= STEP;
       }
-    } else {
-      accumulator = 0;
+      titleCamX += dt * 26;
+      if (titleCamX > 2350) titleCamX = 1500;
+      const cam = { x: titleCamX, y: 980 };
+      drawTitle(ctx, world, cam, !!save, input.mouse);
+      audio.setEngine(0, false);
+      audio.setSiren(0);
+      return;
     }
-    renderer.draw(world, screen, { hasSave: !!save, muted: audio.muted });
+
+    if (mode === 'play' && !paused) {
+      const p = world.playerPos();
+      const cam = cameraFor(p);
+      acc += dt;
+      let steps = 0;
+      while (acc > STEP && steps < 5) {
+        world.step(STEP, input.frame(cam, !!world.player.inCar));
+        acc -= STEP;
+        steps += 1;
+      }
+      if (steps === 5) acc = 0;
+      for (const name of world.fx) audio.play(name);
+      const car = world.player.inCar;
+      audio.setEngine(car ? car.speed / 645 : 0, !!car);
+      let siren = 0;
+      if (world.state.wanted > 0) {
+        let nearest = Infinity;
+        for (const c of world.cars) {
+          if (c.driver !== 'police') continue;
+          nearest = Math.min(nearest, Math.hypot(c.x - p.x, c.y - p.y));
+        }
+        if (nearest < Infinity) siren = Math.max(0, 1 - nearest / 950);
+      }
+      audio.setSiren(siren);
+      saveTimer += dt;
+      if (saveTimer > 4) {
+        saveTimer = 0;
+        storeSave(world);
+      }
+      if (world.state.over) {
+        overTimer += dt;
+        if (overTimer > 1.1) {
+          mode = 'over';
+          storeSave(world);
+        }
+      }
+    }
+
+    const p = world.playerPos();
+    const cam = cameraFor(p);
+    drawWorld(ctx, world, cam);
+    drawHUD(ctx, world, { muted: audio.muted });
+    if (paused) drawPaused(ctx);
+    if (mode === 'over') drawOver(ctx, world, world.state.over);
   }
-
-  // Leaving the tab pauses a running game rather than letting the city run unseen.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    }
-  });
-
-  announce('Palm City Heat. Press Space or click to start.');
   requestAnimationFrame(frame);
 }
-
-if (shot) runShot(shot);
-else runGame();

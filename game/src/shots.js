@@ -1,75 +1,75 @@
-// The screenshot scenes behind ?shot=title|street|driving|chase. Each one plays the
-// real rules forward from a fresh world for a fixed number of steps with scripted
-// inputs, so the frame is what a short game really looks like and the same seed
-// always gives the same frame.
+// Staged scenes for the screenshots. Each scene builds a world from a
+// fixed seed and steps it with scripted inputs until it looks like a real
+// moment of play, so the four shots in shots.json are honest frames of
+// the game, not mock-ups.
+
+import { createRandom } from './random.js';
+import { createWorld } from './world.js';
 import { STEP } from './config.js';
-import { SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 
 const IDLE = { mx: 0, my: 0, sprint: false, handbrake: false, enterPressed: false, reloadPressed: false, fire: false, aimX: 0, aimY: 0 };
 
-function driveInput(steer) {
-  return { mx: steer, my: -1, sprint: false, handbrake: false, enterPressed: false, reloadPressed: false, fire: false, aimX: 0, aimY: 0 };
+function step(world, input, seconds) {
+  const n = Math.round(seconds / STEP);
+  for (let i = 0; i < n; i += 1) world.step(STEP, input);
 }
 
-function stepFor(world, seconds, input) {
-  const steps = Math.round(seconds / STEP);
-  for (let i = 0; i < steps; i += 1) world.step(STEP, input, false);
-}
-
-/** Put the player in the nearest parked car, placed on a road heading south. */
-function stageDrive(world, x, y) {
-  let car = null;
-  let best = Infinity;
-  for (const c of world.cars) {
-    if (c.driver !== 'parked') continue;
-    const d = Math.hypot(c.x - world.player.x, c.y - world.player.y);
-    if (d < best) {
-      best = d;
-      car = c;
-    }
+/** Walk the player to the nearest car and get in. Returns the car. */
+function getInCar(world) {
+  const p = world.player;
+  let best = null;
+  let bd = Infinity;
+  for (const car of world.cars) {
+    if (car.wrecked || car.driver === 'police') continue;
+    const d = Math.hypot(car.x - p.x, car.y - p.y);
+    if (d < bd) { bd = d; best = car; }
   }
-  if (!car) return;
-  car.x = x;
-  car.y = y;
-  car.angle = Math.PI / 2;
-  car.driver = 'player';
-  car.speed = 0;
-  car.vx = 0;
-  car.vy = 0;
-  world.player.inCar = car;
-  world.player.x = x;
-  world.player.y = y;
+  if (!best) return null;
+  p.x = best.x + 40;
+  p.y = best.y + 10;
+  world.step(STEP, { ...IDLE, enterPressed: true });
+  return world.player.inCar;
 }
 
-/**
- * Set `world` to the named scene (title, street, driving or chase; any other name
- * is title) and return the screen to draw over it.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'street' && name !== 'driving' && name !== 'chase') {
-    // Title: the city alive behind the menu for five seconds.
-    for (let i = 0; i < 5 / STEP; i += 1) world.step(STEP, IDLE, true);
-    return { screen: SCREEN_TITLE };
+export function stageShot(name, seed) {
+  const world = createWorld(createRandom(seed));
+  if (name === 'title') {
+    step(world, IDLE, 2.2);
+    return { world, camCenter: { x: 1710, y: 1240 } };
   }
   if (name === 'street') {
-    // On foot at a busy corner: traffic rolling past, pedestrians on the sidewalk.
-    world.player.x = 1000;
-    world.player.y = 800;
-    world.player.angle = Math.PI / 2;
-    stepFor(world, 6, IDLE);
-    return { screen: SCREEN_PLAY };
+    // On foot downtown, pistol out, Mara's first job on the banner.
+    world.player.x = 1006;
+    world.player.y = 806;
+    step(world, { ...IDLE, aimX: 1400, aimY: 700 }, 3.4);
+    return { world, camCenter: { x: world.player.x, y: world.player.y } };
   }
   if (name === 'driving') {
-    // Behind the wheel on Coral Row, traffic ahead, palms on the sidewalk.
-    stageDrive(world, 932, 700);
-    stepFor(world, 3, driveInput(0));
-    return { screen: SCREEN_PLAY };
+    const car = getInCar(world);
+    if (car) {
+      car.x = 1150;
+      car.y = 1360 - 28;
+      car.angle = 0;
+      car.vx = 0;
+      car.vy = 0;
+      step(world, { ...IDLE, my: -1, aimX: car.x + 500, aimY: car.y }, 1.45);
+    }
+    const p = world.playerPos();
+    return { world, camCenter: { x: p.x + 90, y: p.y } };
   }
-  // Chase: three stars, police cars closing in, the player flooring it straight
-  // down Coral Row (steering off-road would wreck the car on the buildings).
-  stageDrive(world, 932, 700);
-  world.addWanted(3);
-  stepFor(world, 3, driveInput(0));
-  return { screen: SCREEN_PLAY };
+  // chase: three stars, the law converging while the player runs east.
+  const car = getInCar(world);
+  if (car) {
+    car.x = 1500;
+    car.y = 1860 - 28;
+    car.angle = 0;
+    car.vx = 0;
+    car.vy = 0;
+    world.state.wanted = 3;
+    step(world, { ...IDLE, my: -1, aimX: car.x + 500, aimY: car.y }, 4.2);
+  }
+  const p = world.playerPos();
+  return { world, camCenter: { x: p.x + 60, y: p.y } };
 }
+
+export const SHOT_NAMES = ['title', 'street', 'driving', 'chase'];

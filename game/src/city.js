@@ -1,126 +1,93 @@
-// Palm City itself: a seeded road grid, city blocks filled with buildings, palms
-// along the sidewalks, and the named places the story uses. Pure data + geometry:
-// no drawing and no browser in here. Collision is circle-vs-rectangle against the
-// building list, and the water strip is solid for everyone.
-import { BEACH, LANE, PALETTE, ROADS_H, ROADS_V, ROAD_W, WORLD } from './config.js';
+// Palm City's layout: the road grid, the blocks and buildings between the
+// roads, palms and lamps, the beach, and the collision helpers every mover
+// in the world shares. Generation is driven by the seeded random passed
+// in, so a seed always builds the same city.
+
+import { BEACH, LANE, PALETTE, ROADS_H, ROADS_V, ROAD_W, SIDEWALK, WORLD, ZONES } from './config.js';
+
+const HALF_ROAD = ROAD_W / 2 + SIDEWALK; // buildings keep this far from a centre line
+
+/** The strips of land between two neighbouring road centre lines. */
+function strips(lines, limit) {
+  const out = [];
+  let from = 36;
+  for (const line of lines) {
+    out.push([from, line - HALF_ROAD]);
+    from = line + HALF_ROAD;
+  }
+  out.push([from, limit]);
+  return out.filter(([a, b]) => b - a > 60);
+}
 
 export function createCity(random) {
   const buildings = [];
-  const palms = [];
-  const props = [];
-  const half = ROAD_W / 2;
-
-  // City blocks are the rectangles between neighbouring roads. Each block gets
-  // 1-3 buildings, or stays a park (palms only) or a parking lot.
-  const xs = [0, ...ROADS_V, WORLD.width];
-  const ys = [0, ...ROADS_H, WORLD.height];
-  for (let bx = 0; bx < xs.length - 1; bx += 1) {
-    for (let by = 0; by < ys.length - 1; by += 1) {
-      const x0 = xs[bx] + (bx === 0 ? 60 : half + 26);
-      const x1 = xs[bx + 1] - (bx === xs.length - 2 ? 60 : half + 26);
-      const y0 = ys[by] + (by === 0 ? 60 : half + 26);
-      const y1 = ys[by + 1] - (by === ys.length - 2 ? 60 : half + 26);
-      const bw = x1 - x0;
-      const bh = y1 - y0;
-      if (bw < 130 || bh < 110) continue;
-      // The beach blocks (east edge) stay open sand, no buildings.
-      if (x0 > BEACH.sandX - 200) continue;
-      const roll = random();
-      if (roll < 0.12) {
-        // Park: palms only.
-        const n = 3 + Math.floor(random() * 4);
-        for (let i = 0; i < n; i += 1) {
-          palms.push({ x: x0 + 30 + random() * (bw - 60), y: y0 + 30 + random() * (bh - 60), s: 0.8 + random() * 0.5 });
+  const xStrips = strips(ROADS_V, BEACH.sandX - 16);
+  const yStrips = strips(ROADS_H, WORLD.height - 36);
+  for (const [x0, x1] of xStrips) {
+    for (const [y0, y1] of yStrips) {
+      // Fill each block with a few lots; a lot usually holds one building.
+      const lotW = 168;
+      const lotH = 168;
+      for (let lx = x0 + 8; lx + 70 < x1; lx += lotW) {
+        for (let ly = y0 + 8; ly + 70 < y1; ly += lotH) {
+          if (random.chance(0.22)) continue; // a courtyard or parking gap
+          const w = Math.min(random.range(86, 150), x1 - lx - 14);
+          const h = Math.min(random.range(86, 150), y1 - ly - 14);
+          if (w < 60 || h < 60) continue;
+          buildings.push({
+            x: lx + random.range(2, 10),
+            y: ly + random.range(2, 10),
+            w,
+            h,
+            roof: random.int(0, PALETTE.roof.length - 1),
+            trim: random.range(0, 1),
+          });
         }
-        continue;
       }
-      const count = roll < 0.45 ? 1 : roll < 0.85 ? 2 : 3;
-      // Split the block into a 2x2 grid of cells and put one building in a few
-      // of them: dense, and buildings can never overlap each other.
-      const cells = [
-        { x: x0, y: y0, w: bw / 2, h: bh / 2 },
-        { x: x0 + bw / 2, y: y0, w: bw / 2, h: bh / 2 },
-        { x: x0, y: y0 + bh / 2, w: bw / 2, h: bh / 2 },
-        { x: x0 + bw / 2, y: y0 + bh / 2, w: bw / 2, h: bh / 2 },
-      ];
-      // Shuffle the cells with the seeded random.
-      for (let i = cells.length - 1; i > 0; i -= 1) {
-        const j = Math.floor(random() * (i + 1));
-        const tmp = cells[i];
-        cells[i] = cells[j];
-        cells[j] = tmp;
-      }
-      for (let i = 0; i < count; i += 1) {
-        const cell = cells[i];
-        const w = Math.min(cell.w - 24, 120 + random() * 150);
-        const h = Math.min(cell.h - 24, 100 + random() * 130);
-        if (w < 60 || h < 50) continue;
-        const x = cell.x + 12 + random() * Math.max(1, cell.w - w - 24);
-        const y = cell.y + 12 + random() * Math.max(1, cell.h - h - 24);
-        buildings.push({
-          x, y, w, h,
-          color: PALETTE.building[Math.floor(random() * PALETTE.building.length)],
-          roof: random() < 0.5,
-          height: 1 + Math.floor(random() * 3),
-        });
-      }
-      // A lamp or hydrant on the block corner.
-      if (random() < 0.6) props.push({ kind: random() < 0.6 ? 'lamp' : 'hydrant', x: x0 + 8, y: y0 + 8 });
     }
   }
 
-  // Palms along every sidewalk, skipping intersections and building fronts.
-  for (const rx of ROADS_V) {
-    for (let y = 90; y < WORLD.height - 90; y += 190) {
-      if (ROADS_H.some((ry) => Math.abs(y - ry) < 110)) continue;
-      const px = rx + half + 16;
-      if (px < BEACH.sandX - 40 && random() < 0.75) palms.push({ x: px, y: y + random() * 40, s: 0.9 + random() * 0.4 });
+  // Palms line the sidewalks and the beach.
+  const palms = [];
+  const palmRow = (fixed, along, vertical) => {
+    for (let a = 90; a < along; a += random.range(150, 230)) {
+      const off = (random.chance(0.5) ? -1 : 1) * (ROAD_W / 2 + 7);
+      const x = vertical ? fixed + off : a + random.range(-16, 16);
+      const y = vertical ? a + random.range(-16, 16) : fixed + off;
+      if (x > BEACH.sandX - 8) continue;
+      palms.push({ x, y, s: random.range(0.85, 1.25), lean: random.range(-0.14, 0.14) });
     }
-  }
-  for (const ry of ROADS_H) {
-    for (let x = 90; x < WORLD.width - 90; x += 190) {
-      if (ROADS_V.some((rx) => Math.abs(x - rx) < 110)) continue;
-      const py = ry + half + 16;
-      if (x < BEACH.sandX - 40 && random() < 0.75) palms.push({ x: x + random() * 40, y: py, s: 0.9 + random() * 0.4 });
-    }
-  }
-  // A palm row down the beach.
-  for (let y = 200; y < WORLD.height - 150; y += 170) {
-    palms.push({ x: BEACH.sandX + 26, y: y + random() * 30, s: 1 + random() * 0.5 });
-  }
-
-  // The story's named places (fixed, so missions and screenshots are stable).
-  const zones = {
-    spawn: { x: 960, y: 780 },
-    docks: { x: 330, y: 2680 },
-    safehouse: { x: 3360, y: 330 },
-    garage: { x: 1560, y: 2360, w: 220, h: 150 },
-    marina: { x: 3800, y: 1500 },
-    airstrip: { x: 2400, y: 2900 },
-    depot: { x: 600, y: 1900 },
-    sportsCar: { x: 2790, y: 1290 },
-    cashBags: [
-      { x: 960, y: 360 },
-      { x: 2160, y: 1860 },
-      { x: 1560, y: 860 },
-    ],
-    depotCrates: [
-      { x: 560, y: 1860 },
-      { x: 660, y: 1920 },
-      { x: 600, y: 1980 },
-    ],
   };
+  for (const rx of ROADS_V) palmRow(rx, WORLD.height - 60, true);
+  for (const ry of ROADS_H) palmRow(ry, BEACH.sandX - 40, false);
+  for (let i = 0; i < 26; i += 1) {
+    palms.push({ x: random.range(BEACH.sandX + 24, BEACH.waterX - 30), y: random.range(60, WORLD.height - 60), s: random.range(0.9, 1.35), lean: random.range(-0.2, 0.2) });
+  }
 
-  function circleHitsBuilding(x, y, r) {
-    for (let i = 0; i < buildings.length; i += 1) {
-      const b = buildings[i];
-      const cx = Math.max(b.x, Math.min(x, b.x + b.w));
-      const cy = Math.max(b.y, Math.min(y, b.y + b.h));
-      const dx = x - cx;
-      const dy = y - cy;
-      if (dx * dx + dy * dy < r * r) return b;
+  // Lamps stand at intersection corners.
+  const lamps = [];
+  for (const rx of ROADS_V) {
+    for (const ry of ROADS_H) {
+      lamps.push({ x: rx - HALF_ROAD + 4, y: ry - HALF_ROAD + 4 });
+      lamps.push({ x: rx + HALF_ROAD - 4, y: ry + HALF_ROAD - 4 });
     }
-    return null;
+  }
+
+  // Painted ground pads for the story locations.
+  const pads = [
+    { x: 190, y: 2540, w: 300, h: 300, kind: 'docks' },
+    { x: 2030, y: 2835, w: 740, h: 110, kind: 'strip' },
+    { x: ZONES.spray.x - 90, y: ZONES.spray.y - 130, w: 180, h: 180, kind: 'spray' },
+    { x: BEACH.waterX - 6, y: ZONES.marina.y - 60, w: 210, h: 120, kind: 'pier' },
+  ];
+
+  function inWater(x) {
+    return x >= BEACH.waterX;
+  }
+
+  function isOnRoad(x, y) {
+    if (ROADS_V.some((rx) => Math.abs(x - rx) <= ROAD_W / 2)) return true;
+    return ROADS_H.some((ry) => Math.abs(y - ry) <= ROAD_W / 2);
   }
 
   /** Push a circle out of every building it overlaps; returns the building hit, if any. */
@@ -128,15 +95,20 @@ export function createCity(random) {
     let hit = null;
     for (let i = 0; i < buildings.length; i += 1) {
       const b = buildings[i];
+      if (pos.x < b.x - r || pos.x > b.x + b.w + r || pos.y < b.y - r || pos.y > b.y + b.h + r) continue;
       const cx = Math.max(b.x, Math.min(pos.x, b.x + b.w));
       const cy = Math.max(b.y, Math.min(pos.y, b.y + b.h));
       let dx = pos.x - cx;
       let dy = pos.y - cy;
       const d2 = dx * dx + dy * dy;
-      if (d2 >= r * r) continue;
+      if (d2 > r * r) continue;
       hit = b;
-      if (d2 < 0.0001) {
-        // Centre inside the rectangle: push out along the shortest side.
+      if (d2 > 0.0001) {
+        const d = Math.sqrt(d2);
+        pos.x = cx + (dx / d) * r;
+        pos.y = cy + (dy / d) * r;
+      } else {
+        // Centre inside the box: leave by the nearest face.
         const left = pos.x - b.x;
         const right = b.x + b.w - pos.x;
         const top = pos.y - b.y;
@@ -146,69 +118,54 @@ export function createCity(random) {
         else if (m === right) pos.x = b.x + b.w + r;
         else if (m === top) pos.y = b.y - r;
         else pos.y = b.y + b.h + r;
-      } else {
-        const d = Math.sqrt(d2);
-        dx /= d;
-        dy /= d;
-        pos.x = cx + dx * r;
-        pos.y = cy + dy * r;
       }
+      dx = pos.x - cx;
+      dy = pos.y - cy;
     }
     return hit;
   }
 
-  function pointOnRoad(x, y) {
-    for (const rx of ROADS_V) if (Math.abs(x - rx) < half) return true;
-    for (const ry of ROADS_H) if (Math.abs(y - ry) < half) return true;
-    return false;
-  }
-
-  function inWater(x) {
-    return x >= BEACH.waterX;
-  }
-
-  /** A random point on a sidewalk (just off a road), clear of buildings. */
-  function sidewalkPoint() {
-    for (let tries = 0; tries < 40; tries += 1) {
-      const vertical = random() < 0.5;
-      let x;
-      let y;
-      if (vertical) {
-        const rx = ROADS_V[Math.floor(random() * ROADS_V.length)];
-        x = rx + (random() < 0.5 ? -1 : 1) * (half + 18 + random() * 10);
-        y = 80 + random() * (WORLD.height - 160);
-      } else {
-        const ry = ROADS_H[Math.floor(random() * ROADS_H.length)];
-        y = ry + (random() < 0.5 ? -1 : 1) * (half + 18 + random() * 10);
-        x = 80 + random() * (WORLD.width - 220);
-      }
-      if (x < 40 || x > BEACH.sandX - 30 || y < 40 || y > WORLD.height - 40) continue;
-      if (circleHitsBuilding(x, y, 20)) continue;
-      return { x, y };
-    }
-    return { x: 960, y: 780 };
-  }
-
-  /** A random point on a road lane, clear of buildings. */
+  /** A random point on a random road, in a random lane. */
   function roadPoint() {
-    for (let tries = 0; tries < 40; tries += 1) {
-      const vertical = random() < 0.5;
-      let x;
-      let y;
-      if (vertical) {
-        const rx = ROADS_V[Math.floor(random() * ROADS_V.length)];
-        x = rx + (random() < 0.5 ? -1 : 1) * LANE;
-        y = 80 + random() * (WORLD.height - 160);
-      } else {
-        const ry = ROADS_H[Math.floor(random() * ROADS_H.length)];
-        y = ry + (random() < 0.5 ? -1 : 1) * LANE;
-        x = 80 + random() * (WORLD.width - 220);
-      }
-      if (x < 40 || x > BEACH.sandX - 30 || y < 40 || y > WORLD.height - 40) continue;
-      return { x, y };
+    if (random.chance(0.5)) {
+      const rx = random.pick(ROADS_V);
+      return { x: rx + (random.chance(0.5) ? -LANE : LANE), y: random.range(70, WORLD.height - 70), vertical: true, line: rx };
     }
-    return { x: 960, y: 860 };
+    const ry = random.pick(ROADS_H);
+    return { x: random.range(70, BEACH.sandX - 40), y: ry + (random.chance(0.5) ? -LANE : LANE), vertical: false, line: ry };
   }
 
-  return { buildings, palms, props, zones, circleHitsBuilding, resolveCircle, pointOnRoad, inWater, sidewalkPoint, roadPoint };
+  /** A random point on a sidewalk beside a random road. */
+  function sidewalkPoint() {
+    const off = ROAD_W / 2 + SIDEWALK / 2;
+    if (random.chance(0.5)) {
+      const rx = random.pick(ROADS_V);
+      return { x: rx + (random.chance(0.5) ? -off : off), y: random.range(60, WORLD.height - 60) };
+    }
+    const ry = random.pick(ROADS_H);
+    return { x: random.range(60, BEACH.sandX - 30), y: ry + (random.chance(0.5) ? -off : off) };
+  }
+
+  /** A sidewalk point within `radius` of (x, y), with a few tries. */
+  function sidewalkPointNear(x, y, radius) {
+    for (let i = 0; i < 10; i += 1) {
+      const p = sidewalkPoint();
+      if (Math.hypot(p.x - x, p.y - y) < radius) return p;
+    }
+    return sidewalkPoint();
+  }
+
+  return {
+    buildings,
+    palms,
+    lamps,
+    pads,
+    zones: ZONES,
+    inWater,
+    isOnRoad,
+    resolveCircle,
+    roadPoint,
+    sidewalkPoint,
+    sidewalkPointNear,
+  };
 }
