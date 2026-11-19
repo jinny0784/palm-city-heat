@@ -1,80 +1,53 @@
-// Keyboard and mouse for Palm City Heat. createInput wires the listeners;
-// the shell calls frame() once per tick to get the input object the world
-// understands, with the mouse already converted to world coordinates.
+// Keyboard and mouse, gathered in one place. main.js calls applyTo once
+// per frame to pour the current state into world.input (turning the mouse
+// from screen space into world space with the camera), and reads the
+// one-shot flags (interact, pause, mute, confirm), which this module sets
+// on key presses and main clears after use.
 
-export function createInput(canvas, callbacks = {}) {
+export function createInput(canvas) {
   const keys = new Set();
+  const flags = { interact: false, pause: false, mute: false, confirm: false };
   const mouse = { x: 0, y: 0, down: false };
-  let enterQueued = false;
-  let reloadQueued = false;
-  let clickQueued = false;
 
-  function toCanvas(e) {
-    const r = canvas.getBoundingClientRect();
-    return {
-      x: (e.clientX - r.left) * (canvas.width / r.width),
-      y: (e.clientY - r.top) * (canvas.height / r.height),
-    };
-  }
-
-  window.addEventListener('keydown', (e) => {
+  const down = (e) => {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
-    if (callbacks.onAnyKey) callbacks.onAnyKey();
     if (e.repeat) return;
     keys.add(e.code);
-    if (e.code === 'KeyE') enterQueued = true;
-    if (e.code === 'KeyR') reloadQueued = true;
-    if ((e.code === 'Escape' || e.code === 'KeyP') && callbacks.onPause) callbacks.onPause();
-    if (e.code === 'KeyM' && callbacks.onMute) callbacks.onMute();
-    if (e.code === 'Enter' && callbacks.onEnter) callbacks.onEnter();
-  });
-  window.addEventListener('keyup', (e) => keys.delete(e.code));
-  window.addEventListener('blur', () => keys.clear());
+    if (e.code === 'KeyE') flags.interact = true;
+    if (e.code === 'Escape' || e.code === 'KeyP') flags.pause = true;
+    if (e.code === 'KeyM') flags.mute = true;
+    if (e.code === 'Enter') flags.confirm = true;
+  };
+  const up = (e) => keys.delete(e.code);
+  const move = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+  };
+  const mDown = (e) => { move(e); mouse.down = true; flags.confirm = true; };
+  const mUp = () => { mouse.down = false; };
 
-  canvas.addEventListener('mousemove', (e) => {
-    const p = toCanvas(e);
-    mouse.x = p.x;
-    mouse.y = p.y;
-  });
-  canvas.addEventListener('mousedown', (e) => {
-    if (callbacks.onAnyKey) callbacks.onAnyKey();
-    mouse.down = true;
-    clickQueued = true;
-    const p = toCanvas(e);
-    mouse.x = p.x;
-    mouse.y = p.y;
-    if (callbacks.onClick) callbacks.onClick(p.x, p.y);
-  });
-  window.addEventListener('mouseup', () => { mouse.down = false; });
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  window.addEventListener('keydown', down);
+  window.addEventListener('keyup', up);
+  canvas.addEventListener('mousemove', move);
+  canvas.addEventListener('mousedown', mDown);
+  window.addEventListener('mouseup', mUp);
+
+  const has = (...codes) => codes.some((c) => keys.has(c));
 
   return {
+    flags,
     mouse,
-    /** The world's input object for this tick. camera = world coords of the view's top-left. */
-    frame(camera, inCar) {
-      const mx = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
-      const my = (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) - (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0);
-      const space = keys.has('Space');
-      const input = {
-        mx,
-        my,
-        sprint: keys.has('ShiftLeft') || keys.has('ShiftRight'),
-        handbrake: inCar && space,
-        enterPressed: enterQueued,
-        reloadPressed: reloadQueued,
-        fire: mouse.down || (!inCar && space),
-        aimX: camera.x + mouse.x,
-        aimY: camera.y + mouse.y,
-      };
-      enterQueued = false;
-      reloadQueued = false;
-      return input;
-    },
-    /** True once per mouse click, for menus. */
-    consumeClick() {
-      const c = clickQueued;
-      clickQueued = false;
-      return c;
+    /** Pour the current controls into world.input. cam is the view's top-left in world space. */
+    applyTo(world, cam) {
+      const input = world.input;
+      input.moveX = (has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0);
+      input.moveY = (has('KeyS', 'ArrowDown') ? 1 : 0) - (has('KeyW', 'ArrowUp') ? 1 : 0);
+      input.sprint = has('ShiftLeft', 'ShiftRight');
+      input.handbrake = has('Space');
+      input.fire = mouse.down || has('Space');
+      input.aimX = cam.x + mouse.x;
+      input.aimY = cam.y + mouse.y;
     },
   };
 }

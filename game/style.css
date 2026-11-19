@@ -1,4 +1,7 @@
-/* Palm City Heat — page chrome. The game itself is all canvas. */
+/* Palm City Heat — the page around the canvas. A deep-sea backdrop, a
+   sun-set brand line, and the game framed like a postcard. In shot mode
+   (body.shot, set by main.js for ?shot= captures) all of the page chrome
+   steps away so the canvas is the whole frame. */
 
 * {
   box-sizing: border-box;
@@ -12,52 +15,67 @@ body {
 
 body {
   min-height: 100vh;
-  background: linear-gradient(160deg, #2b1030 0%, #571f3d 46%, #b3402a 78%, #e2703a 100%);
+  background: linear-gradient(160deg, #0d2b3e 0%, #12455e 55%, #7a4a2b 130%);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: #ffe9c9;
+  color: #eef4f6;
   display: flex;
-  align-items: center;
   justify-content: center;
 }
 
 .wrap {
-  padding: 22px 12px 14px;
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 22px 12px 30px;
+  gap: 12px;
+}
+
+.brand {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #f6e8d8;
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
+}
+
+.brand span {
+  color: #ffb347;
 }
 
 canvas#game {
-  width: min(1280px, 97vw);
+  width: min(1280px, 96vw);
   height: auto;
-  aspect-ratio: 1280 / 800;
-  background: #79b657;
   border-radius: 10px;
-  box-shadow: 0 24px 70px rgba(10, 0, 18, 0.55), 0 4px 18px rgba(10, 0, 18, 0.4);
-  cursor: crosshair;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.12);
+  background: #1b6ca8;
 }
 
 .hint {
-  margin: 12px 0 0;
+  margin: 0;
   font-size: 13.5px;
-  letter-spacing: 0.02em;
-  opacity: 0.85;
+  letter-spacing: 0.04em;
+  color: rgba(238, 244, 246, 0.75);
+  text-align: center;
 }
 
-/* Screenshot mode: the bare frame, nothing else. */
 body.shot {
   background: #000;
-  display: block;
 }
 
 body.shot .wrap {
   padding: 0;
+  gap: 0;
+}
+
+body.shot .brand,
+body.shot .hint {
+  display: none;
 }
 
 body.shot canvas#game {
   width: 1280px;
   border-radius: 0;
   box-shadow: none;
-}
-
-body.shot .hint {
-  display: none;
 }

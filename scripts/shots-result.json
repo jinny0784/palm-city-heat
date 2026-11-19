@@ -1,26 +1,26 @@
 [
   {
     "name": "title",
-    "file": "screenshots/1-title.jpg",
-    "bytes": 104345,
-    "quality": 88
+    "file": "1-title.jpg",
+    "bytes": 71527,
+    "quality": 84
   },
   {
     "name": "street",
-    "file": "screenshots/2-street.jpg",
-    "bytes": 109522,
-    "quality": 88
+    "file": "2-street.jpg",
+    "bytes": 74335,
+    "quality": 84
   },
   {
     "name": "driving",
-    "file": "screenshots/3-driving.jpg",
-    "bytes": 90416,
-    "quality": 88
+    "file": "3-driving.jpg",
+    "bytes": 70227,
+    "quality": 84
   },
   {
     "name": "chase",
-    "file": "screenshots/4-chase.jpg",
-    "bytes": 110364,
-    "quality": 88
+    "file": "4-chase.jpg",
+    "bytes": 78205,
+    "quality": 84
   }
 ]

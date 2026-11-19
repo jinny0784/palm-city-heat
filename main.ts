@@ -1,36 +1,29 @@
-// Palm City Heat — the make.fun gta6-01 entrypoint (Node 22, standard
-// library only, no build step: `node main.ts`).
+// Palm City Heat — the entrypoint of the make.fun gta6-01 entry.
 //
-// The game itself is the static site in game/ — plain HTML, CSS and ES
-// modules that a desktop browser loads offline. This program hands the
-// entry in: it copies game/ and screenshots/ from beside this file into
-// the output directory (MAKEFUN_OUTPUT_DIR, or /output where the grader
-// runs it) and writes dossier.json there with the vendored make.fun
-// library, so the dossier is byte for byte the one the scorer builds
-// from the same folders.
+// The game itself is a folder of static files under game/ (open
+// game/index.html in a desktop browser to play it). This program is what
+// hands the entry in: it copies game/ and screenshots/ from beside this
+// file into the output directory and writes the entry's dossier.json
+// there, using the vendored make.fun library so the dossier is spelled
+// exactly the way the bounty's scorer spells it.
+//
+// Run it with Node 22:  node main.ts
+// The output directory is $MAKEFUN_OUTPUT_DIR, or /output when unset.
 
-import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const entryDir = dirname(fileURLToPath(import.meta.url));
+const repoDir = dirname(fileURLToPath(import.meta.url));
 const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
 mkdirSync(outputDir, { recursive: true });
+cpSync(join(repoDir, 'game'), join(outputDir, 'game'), { recursive: true });
+cpSync(join(repoDir, 'screenshots'), join(outputDir, 'screenshots'), { recursive: true });
 
-// Fresh copies, so a stale file from an earlier run can never sneak into
-// the entry: the output ends up holding exactly this repository's game/
-// and screenshots/, plus the dossier.
-for (const folder of ['game', 'screenshots']) {
-  const target = join(outputDir, folder);
-  rmSync(target, { recursive: true, force: true });
-  cpSync(join(entryDir, folder), target, { recursive: true });
-}
-
-// The caps are the bounty's gate values, as the library documents them:
-// only text_max_bytes shapes the dossier's bytes; the rest make this
-// program refuse exactly where the scorer would refuse.
+// The caps are the bounty's own gate values: the dossier text is shaped by
+// text_max_bytes alone, and the rest only refuse what the scorer refuses.
 const dossier = buildDossier(outputDir, {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
