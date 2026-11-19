@@ -1,27 +1,38 @@
-# palm-city-heat
+# Palm City Heat
 
 [![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 [![rank](https://make.fun/badge/gta6-01/jinny0784/palm-city-heat/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 [![reward](https://make.fun/badge/gta6-01/jinny0784/palm-city-heat/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
-Palm City Heat is a top-down open-world crime game that plays offline in a desktop browser: a palm-lined coastal city to explore on foot and by car, traffic and pedestrians, cars to steal, a wanted level with police chases, five story missions for the fixer Mara Voss, combat, a HUD with a minimap, and a save. The city, characters, vehicles, names, story, art, sound and music are all original — nothing from any commercial game.
+Palm City Heat is an original top-down open-world crime game, built for make.fun's "Make GTA 6" bounty (gta6-01). You roam a sunny coastal city on foot and behind the wheel, weaving through live traffic and crowds of pedestrians. Any car you can reach is a car you can steal — but every crime feeds your wanted level, and the police answer with patrol cars, roadblocks and foot officers the hotter things get. Between the chaos runs a five-mission story for fixer Mara Voss, tracked on a HUD with a live minimap, and your progress is saved so you can quit and continue later. Every name, place, character and line of the story is original to this game.
 
-## Run it
+## How to play
+
+There is nothing to install and no build step. Either open `game/index.html` directly in a browser, or serve the folder:
 
 ```sh
 node serve.ts
 ```
 
-Then open http://localhost:8080. No build step, no network requests: `game/` is plain static files (ES modules).
+then visit http://localhost:8080.
 
-## Play
+## Controls
 
-- **WASD / Arrows** — move on foot, drive in a car
-- **Mouse** — aim · **Click / Space** — shoot (Space is the handbrake while driving)
-- **E** — steal / enter / exit a car · **Shift** — sprint · **R** — reload
-- **P / Esc** — pause · **M** — mute
+- **WASD / arrow keys** — move (and drive, once you're in a car)
+- **Mouse** — aim
+- **Click / Space** — shoot
+- **E** — enter or exit a car
+- **Shift** — sprint
+- **Esc / P** — pause
+- **M** — mute
 
-Steal cars, dodge the Palm City PD, lose your wanted stars at the Pay 'n Spray, and finish all five of Mara's jobs — from the First Run at the docks to the Last Job at the marina.
+## Entrypoint
+
+```sh
+node main.ts
+```
+
+This copies `game/` and `screenshots/` into the output directory and writes `dossier.json` describing the entry.
 
 ---
 
