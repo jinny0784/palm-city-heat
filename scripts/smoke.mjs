@@ -1,205 +1,142 @@
-// Palm City Heat — a Node smoke test for the simulation. It imports the
-// same modules the browser runs and drives them with synthetic input:
-// city generation, walking, mission 1, entering and driving a car, the
-// pistol, theft and the wanted level, police, the depot crates and the
-// final mission's cash bags. Run with:  node scripts/smoke.mjs
+// smoke.mjs — headless checks for the Palm City Heat simulation.
+// Imports the pure modules (city + world) and steps the world with
+// scripted input: city generation, walking, Mara's first mission
+// auto-starting, entering and exiting a car, acceleration, pistol fire,
+// theft raising the wanted level, police spawning, shooting the depot
+// crates and collecting the final job's cash bags. Exits non-zero on any
+// failure.
 
-import { createWorld, startRun, startMission, stepWorld, tryInteract } from '../game/src/world.js';
-import { buildCity } from '../game/src/city.js';
-import { PLACES } from '../game/src/config.js';
+import { createWorld, stepWorld, startMission, addHeat, starsOf, missionTarget } from '../game/src/world.js';
+import { generateCity, PLACES } from '../game/src/city.js';
 
-const DT = 1 / 60;
 let passed = 0;
 let failed = 0;
-
 function check(name, cond) {
-  if (cond) { passed++; console.log(`  ok  ${name}`); }
-  else { failed++; console.log(`FAIL  ${name}`); }
+  if (cond) { passed++; console.log(`ok   ${name}`); }
+  else { failed++; console.log(`FAIL ${name}`); }
 }
 
-function steps(world, n) {
-  for (let i = 0; i < n; i++) stepWorld(world, DT);
+const IDLE = {
+  moveX: 0, moveY: 0, sprint: false, fire: false, aim: 0,
+  interact: false, throttle: 0, steer: 0,
+};
+function step(w, input, n) {
+  for (let i = 0; i < n; i++) stepWorld(w, input, 1 / 30);
+}
+function finite(w) {
+  const ents = [w.player, ...w.cars, ...w.peds, ...w.cops, ...w.bullets];
+  return ents.every((e) => Number.isFinite(e.x) && Number.isFinite(e.y));
+}
+function calm(w) {
+  // Reset the law so later stages are not interrupted.
+  w.wanted.heat = 0;
+  w.cars = w.cars.filter((c) => c.kind !== 'police');
+  w.cops = [];
+  w.player.hp = 100;
+  w.player.busted = 0;
 }
 
-function allFinite(world) {
-  const pts = [world.player, ...world.cars, ...world.peds, ...world.cops, ...world.bullets];
-  return pts.every((o) => Number.isFinite(o.x) && Number.isFinite(o.y));
-}
+// --- city generation -------------------------------------------------------
+const city = generateCity(7);
+check('city generates buildings', city.buildings.length > 40);
+check('city generates parking spots', city.parkingSpots.length >= 12);
+check('city generates palms', city.palms.length > 20);
+check('city generates props', city.props.length > 40);
 
-function clearHeat(world) {
-  world.wanted = 0;
-  world.cars = world.cars.filter((c) => c.kind !== 'police');
-  world.cops = [];
-  world.bustedMeter = 0;
-}
-
-function teleport(world, x, y) {
-  const p = world.player;
-  if (p.car) { p.car.x = x; p.car.y = y; }
-  p.x = x; p.y = y;
-}
-
-// --- the city ------------------------------------------------------------
-{
-  const a = buildCity(7);
-  const b = buildCity(7);
-  check('city generation is deterministic', a.buildings.length === b.buildings.length && a.buildings[0].x === b.buildings[0].x);
-  check('city has buildings, palms and blocks', a.buildings.length > 100 && a.palms.length > 20 && a.blocks.length >= 25);
-}
-
-// --- a fresh world ---------------------------------------------------------
-const world = createWorld(7);
-check('traffic is flowing', world.cars.filter((c) => c.kind === 'traffic').length >= 10);
-check('parked cars are scattered', world.cars.filter((c) => c.kind === 'parked').length >= 10);
-check('pedestrians are out', world.peds.length >= 26);
-
-startRun(world, null);
-check('run starts in play mode', world.mode === 'play');
-check('mission 1 auto-starts', world.mission?.index === 0 && world.mission?.stage === 0);
-check('mission 1 points at the docks', world.mission.marker.x === PLACES.docks.x && world.mission.marker.y === PLACES.docks.y);
+// --- world boot and the first mission --------------------------------------
+const w = createWorld(7);
+check('player spawns at the spawn point', Math.abs(w.player.x - PLACES.spawn.x) < 1 && Math.abs(w.player.y - PLACES.spawn.y) < 1);
+check('mission 1 auto-starts', !!w.mission && w.mission.index === 0 && w.mission.stage === 0);
+check('mission 1 target is the docks', (() => {
+  const t = missionTarget(w);
+  return !!t && t.x === PLACES.docks.x && t.y === PLACES.docks.y;
+})());
+check('traffic is on the road', w.cars.some((c) => c.kind === 'traffic'));
+check('about a dozen parked cars', w.cars.filter((c) => c.kind === 'parked').length >= 10);
+check('pedestrians are walking', w.peds.length > 15);
 
 // --- walking ---------------------------------------------------------------
-{
-  const y0 = world.player.y;
-  world.input.moveY = -1;
-  world.input.aimX = world.player.x;
-  world.input.aimY = world.player.y - 200;
-  steps(world, 60);
-  world.input.moveY = 0;
-  check('walking moves the player north', world.player.y < y0 - 90);
-  check('no NaN after walking', allFinite(world));
-}
+const startX = w.player.x;
+step(w, { ...IDLE, moveX: 1, aim: 0 }, 45);
+check('walking moves the player', w.player.x > startX + 40);
+check('positions stay finite while walking', finite(w));
 
-// --- mission 1, both legs ----------------------------------------------------
-{
-  teleport(world, PLACES.docks.x, PLACES.docks.y);
-  steps(world, 3);
-  check('docks pickup advances mission 1', world.mission.stage === 1);
-  teleport(world, PLACES.cafe.x, PLACES.cafe.y);
-  steps(world, 3);
-  check('delivery completes mission 1 and starts mission 2', world.mission.index === 1);
-  check('mission 1 paid out', world.cash === 120 + 300);
+// --- entering, driving, exiting --------------------------------------------
+const parked = w.cars.find((c) => c.kind === 'parked');
+w.player.x = parked.x;
+w.player.y = parked.y;
+step(w, { ...IDLE, interact: true }, 1);
+check('E enters a parked car', !!w.player.inCar);
+const myCar = w.player.inCar;
+// Put the car on a clear stretch of the north-south avenue for the run.
+myCar.x = 940;
+myCar.y = 640;
+myCar.angle = -Math.PI / 2;
+myCar.speed = 0;
+let topSpeed = 0;
+for (let i = 0; i < 80; i++) {
+  stepWorld(w, { ...IDLE, throttle: 1 }, 1 / 30);
+  topSpeed = Math.max(topSpeed, Math.abs(myCar.speed));
 }
+check('the car accelerates hard', topSpeed > 130);
+check('the car covers ground', Math.hypot(myCar.x - 940, myCar.y - 640) > 60);
+step(w, { ...IDLE, interact: true }, 1);
+check('E exits the car', w.player.inCar === null);
 
-// --- cars: enter, accelerate, exit -------------------------------------------
-{
-  const car = world.cars.find((c) => c.kind === 'parked');
-  teleport(world, car.x + car.radius + 12, car.y);
-  tryInteract(world);
-  check('E enters a parked car', world.player.car === car);
-  const x0 = car.x;
-  const y0 = car.y;
-  world.input.moveY = -1; // W: forward
-  steps(world, 90);
-  world.input.moveY = 0;
-  check('the car accelerates', car.speed > 55);
-  check('the car travels', Math.hypot(car.x - x0, car.y - y0) > 30);
-  tryInteract(world);
-  check('E exits the car', world.player.car === null);
-  check('no NaN after driving', allFinite(world));
+// --- pistol fire -------------------------------------------------------------
+const ammoBefore = w.player.ammo;
+let sawBullet = false;
+for (let i = 0; i < 12; i++) {
+  stepWorld(w, { ...IDLE, fire: true, aim: 0.6 }, 1 / 30);
+  if (w.bullets.length > 0) sawBullet = true;
 }
+check('the pistol fires bullets', sawBullet);
+check('firing spends ammo', w.player.ammo < ammoBefore);
 
-// --- the pistol ----------------------------------------------------------------
-{
-  const ammo0 = world.player.ammo;
-  world.input.aimX = world.player.x + 220;
-  world.input.aimY = world.player.y;
-  world.input.fire = true;
-  steps(world, 2);
-  world.input.fire = false;
-  check('firing spends a bullet', world.player.ammo === ammo0 - 1 && world.stats.shots >= 1);
-  clearHeat(world);
+// --- theft -------------------------------------------------------------------
+const traffic = w.cars.find((c) => c.kind === 'traffic');
+w.player.x = traffic.x;
+w.player.y = traffic.y;
+const heatBefore = w.wanted.heat;
+step(w, { ...IDLE, interact: true }, 1);
+check('E steals the traffic car', w.player.inCar === traffic);
+check('theft raises the wanted level a star', w.wanted.heat >= heatBefore + 0.99 && starsOf(w) >= 1);
+step(w, { ...IDLE, interact: true }, 1);
+check('the stolen car can be exited', w.player.inCar === null);
+
+// --- police response ---------------------------------------------------------
+addHeat(w, 2.2);
+step(w, IDLE, 160);
+check('police cars spawn at three stars', w.cars.some((c) => c.kind === 'police'));
+check('positions stay finite under pursuit', finite(w));
+
+// --- mission 3: depot crates ---------------------------------------------------
+calm(w);
+startMission(w, 2);
+check('mission 3 resets three live crates', w.crates.filter((c) => c.alive).length === 3);
+const crate = w.crates[0];
+w.player.x = crate.x - 90;
+w.player.y = crate.y;
+w.player.ammo = 60;
+let broke = false;
+for (let i = 0; i < 240 && !broke; i++) {
+  const aim = Math.atan2(crate.y - w.player.y, crate.x - w.player.x);
+  stepWorld(w, { ...IDLE, fire: true, aim }, 1 / 30);
+  if (!crate.alive) broke = true;
 }
+check('shooting destroys a depot crate', broke);
 
-// --- theft ----------------------------------------------------------------------
-{
-  const traffic = world.cars.find((c) => c.kind === 'traffic' && c.driver);
-  teleport(world, traffic.x + traffic.radius + 12, traffic.y);
-  const wanted0 = world.wanted;
-  tryInteract(world);
-  check('stealing a traffic car takes it over', world.player.car === traffic);
-  check('theft raises the wanted level', world.wanted > wanted0);
-  check('the theft is counted', world.stats.steals >= 1);
-  tryInteract(world);
-  clearHeat(world);
+// --- mission 5: the cash bags --------------------------------------------------
+calm(w);
+startMission(w, 4);
+check('mission 5 starts with three bags', w.mission.bags.filter((b) => !b.taken).length === 3);
+for (const bag of [...w.mission.bags]) {
+  w.player.x = bag.x;
+  w.player.y = bag.y;
+  step(w, IDLE, 3);
 }
+check('all three bags collect', w.mission.bags.every((b) => b.taken) && w.mission.stage === 1);
+check('positions stay finite at the end', finite(w));
 
-// --- mission 3: the depot crates --------------------------------------------------
-{
-  startMission(world, 2);
-  teleport(world, PLACES.depot.x, PLACES.depot.y);
-  steps(world, 3);
-  check('arriving at the depot starts the loud part', world.mission.stage === 1);
-  world.player.ammo = 300;
-  for (const crate of world.crates) {
-    teleport(world, crate.x - 62, crate.y);
-    world.input.aimX = crate.x;
-    world.input.aimY = crate.y;
-    world.input.fire = true;
-    for (let i = 0; i < 150 && crate.alive; i++) {
-      stepWorld(world, DT);
-      if (i % 20 === 0) clearHeat(world);
-    }
-    world.input.fire = false;
-    check(`crate at ${crate.x},${crate.y} shot apart`, !crate.alive);
-  }
-  steps(world, 3);
-  check('all crates down advances mission 3', world.mission.stage === 2);
-  clearHeat(world);
-}
-
-// --- mission 5: the cash bags -------------------------------------------------------
-{
-  startMission(world, 4);
-  for (const bag of world.bags) {
-    teleport(world, bag.x, bag.y);
-    steps(world, 3);
-  }
-  check('all 3 bags collected', world.mission.bagsGot === 3);
-  check('the boat leg begins', world.mission.stage === 1 && world.mission.marker.x === PLACES.boat.x);
-  teleport(world, PLACES.boat.x, PLACES.boat.y);
-  steps(world, 3);
-  check('reaching the boat completes the story', world.storyComplete === true && world.mode === 'story');
-}
-
-// --- police ---------------------------------------------------------------------------
-{
-  const w2 = createWorld(11);
-  startRun(w2, null);
-  w2.wanted = 3;
-  for (let i = 0; i < 10; i++) {
-    w2.policeSpawnCd = 0;
-    steps(w2, 6);
-  }
-  check('police cars respond at 3 stars', w2.cars.some((c) => c.kind === 'police'));
-  check('foot cops respond at 3 stars', w2.cops.length >= 1);
-  check('no NaN under police pressure', allFinite(w2));
-}
-
-// --- a save-shaped restart ---------------------------------------------------------------
-{
-  const w3 = createWorld(3);
-  startRun(w3, { cash: 500, mission: 2, story: false });
-  check('a save restores cash and mission', w3.cash === 500 && w3.mission.index === 2);
-}
-
-// --- a long, messy drive ---------------------------------------------------------------------
-{
-  const w4 = createWorld(99);
-  startRun(w4, null);
-  const car = w4.cars.find((c) => c.kind === 'parked');
-  teleport(w4, car.x + car.radius + 12, car.y);
-  tryInteract(w4);
-  const moves = [[-1, 0], [-1, 1], [0, 1], [1, 0], [0, -1], [-1, -1]];
-  for (let s = 0; s < 24; s++) {
-    const [my, mx] = moves[s % moves.length];
-    w4.input.moveY = my;
-    w4.input.moveX = mx;
-    steps(w4, 50);
-  }
-  check('a long drive stays finite', allFinite(w4));
-  check('the player stays in the world', w4.player.x >= 0 && w4.player.x <= 4000 && w4.player.y >= 0 && w4.player.y <= 3000);
-}
-
-console.log(`\nsmoke: ${passed} passed, ${failed} failed`);
+console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

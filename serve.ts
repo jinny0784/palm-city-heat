@@ -1,19 +1,16 @@
-// Palm City Heat — a tiny static file server for playing the game locally.
-//
-//   node serve.ts        then open http://localhost:8080
-//
-// It serves this repository's game/ folder at the root and nothing else:
-// no dependencies, no build step, and no way to climb out of game/.
+// serve.ts — a tiny static file server for playing Palm City Heat
+// locally: `node serve.ts`, then open http://localhost:8080 in a desktop
+// browser. The root redirects to the game. Standard library only.
 
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { dirname, extname, join, normalize } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), 'game');
+const root = dirname(fileURLToPath(import.meta.url));
 const port = 8080;
 
-const mime = {
+const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -23,24 +20,30 @@ const mime = {
   '.svg': 'image/svg+xml',
 };
 
-const server = createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url ?? '/', `http://localhost:${port}`);
-    let path = decodeURIComponent(url.pathname);
-    if (path === '/') path = '/index.html';
-    const file = normalize(join(root, path));
-    if (!file.startsWith(root)) {
-      res.writeHead(403).end('forbidden');
-      return;
-    }
-    const body = await readFile(file);
-    res.writeHead(200, { 'content-type': mime[extname(file)] ?? 'application/octet-stream' });
-    res.end(body);
-  } catch {
-    res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');
+function extension(path: string): string {
+  const dot = path.lastIndexOf('.');
+  return dot < 0 ? '' : path.slice(dot).toLowerCase();
+}
+
+const server = createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  if (url.pathname === '/') {
+    res.writeHead(302, { Location: '/game/' });
+    res.end();
+    return;
   }
+  const clean = normalize(decodeURIComponent(url.pathname)).replace(/^([/\\]?\.\.)+/, '');
+  let file = join(root, clean);
+  if (existsSync(file) && statSync(file).isDirectory()) file = join(file, 'index.html');
+  if (!file.startsWith(root) || !existsSync(file)) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Not found');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': TYPES[extension(file)] ?? 'application/octet-stream' });
+  res.end(readFileSync(file));
 });
 
 server.listen(port, () => {
-  console.log(`Palm City Heat is playing at http://localhost:${port}`);
+  console.log(`Palm City Heat: serving at http://localhost:${port}/ (the game is at /game/)`);
 });

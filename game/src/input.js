@@ -1,53 +1,65 @@
-// Keyboard and mouse, gathered in one place. main.js calls applyTo once
-// per frame to pour the current state into world.input (turning the mouse
-// from screen space into world space with the camera), and reads the
-// one-shot flags (interact, pause, mute, confirm), which this module sets
-// on key presses and main clears after use.
+// input.js — keyboard and mouse state for the game. Tracks held keys,
+// one-frame "pressed" edges, and the mouse position over the canvas.
+
+const GAME_KEYS = new Set([
+  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyM', 'KeyP', 'KeyC', 'Space',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight',
+  'Enter', 'Escape',
+]);
 
 export function createInput(canvas) {
-  const keys = new Set();
-  const flags = { interact: false, pause: false, mute: false, confirm: false };
+  const held = new Set();
+  const edges = new Set();
   const mouse = { x: 0, y: 0, down: false };
 
-  const down = (e) => {
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
-    if (e.repeat) return;
-    keys.add(e.code);
-    if (e.code === 'KeyE') flags.interact = true;
-    if (e.code === 'Escape' || e.code === 'KeyP') flags.pause = true;
-    if (e.code === 'KeyM') flags.mute = true;
-    if (e.code === 'Enter') flags.confirm = true;
-  };
-  const up = (e) => keys.delete(e.code);
-  const move = (e) => {
+  window.addEventListener('keydown', (e) => {
+    if (GAME_KEYS.has(e.code)) e.preventDefault();
+    if (!e.repeat) edges.add(e.code);
+    held.add(e.code);
+  });
+  window.addEventListener('keyup', (e) => {
+    held.delete(e.code);
+  });
+  window.addEventListener('blur', () => {
+    held.clear();
+    mouse.down = false;
+  });
+  canvas.addEventListener('mousemove', (e) => {
     const rect = canvas.getBoundingClientRect();
-    mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
-  };
-  const mDown = (e) => { move(e); mouse.down = true; flags.confirm = true; };
-  const mUp = () => { mouse.down = false; };
-
-  window.addEventListener('keydown', down);
-  window.addEventListener('keyup', up);
-  canvas.addEventListener('mousemove', move);
-  canvas.addEventListener('mousedown', mDown);
-  window.addEventListener('mouseup', mUp);
-
-  const has = (...codes) => codes.some((c) => keys.has(c));
+    mouse.x = ((e.clientX - rect.left) / rect.width) * canvas.width;
+    mouse.y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+  });
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0) mouse.down = true;
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (e.button === 0) mouse.down = false;
+  });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
   return {
-    flags,
     mouse,
-    /** Pour the current controls into world.input. cam is the view's top-left in world space. */
-    applyTo(world, cam) {
-      const input = world.input;
-      input.moveX = (has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0);
-      input.moveY = (has('KeyS', 'ArrowDown') ? 1 : 0) - (has('KeyW', 'ArrowUp') ? 1 : 0);
-      input.sprint = has('ShiftLeft', 'ShiftRight');
-      input.handbrake = has('Space');
-      input.fire = mouse.down || has('Space');
-      input.aimX = cam.x + mouse.x;
-      input.aimY = cam.y + mouse.y;
+    down: (code) => held.has(code),
+    /** True only on the frame the key went down; consumes the edge. */
+    pressed(code) {
+      if (edges.has(code)) {
+        edges.delete(code);
+        return true;
+      }
+      return false;
+    },
+    /** Call at the end of each frame to drop stale edges. */
+    postFrame() {
+      edges.clear();
+    },
+    axis() {
+      let x = 0;
+      let y = 0;
+      if (held.has('KeyA') || held.has('ArrowLeft')) x -= 1;
+      if (held.has('KeyD') || held.has('ArrowRight')) x += 1;
+      if (held.has('KeyW') || held.has('ArrowUp')) y -= 1;
+      if (held.has('KeyS') || held.has('ArrowDown')) y += 1;
+      return { x, y };
     },
   };
 }

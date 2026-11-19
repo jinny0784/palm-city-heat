@@ -1,26 +1,61 @@
-// A small seeded random number generator (mulberry32) plus helpers.
+// random.js — deterministic randomness and small math helpers.
 //
-// The whole city and every staged scene are built from one seed, so a
-// given seed always builds the same Palm City — that is what makes the
-// screenshot scenes and the smoke test deterministic.
+// The whole simulation runs off one seeded generator (mulberry32) so a
+// given seed always produces the same city, the same traffic and the same
+// staged screenshot scenes. Nothing in the simulation uses Math.random.
 
-export function makeRng(seed) {
+export function mulberry32(seed) {
   let a = seed >>> 0;
-  const next = () => {
+  return function next() {
+    a |= 0;
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-  return {
-    next,
-    /** Float in [min, max). */
-    range: (min, max) => min + next() * (max - min),
-    /** Integer in [min, max]. */
-    int: (min, max) => Math.floor(min + next() * (max - min + 1)),
-    /** One element of a non-empty array. */
-    pick: (arr) => arr[Math.floor(next() * arr.length)],
-    /** True with probability p. */
-    chance: (p) => next() < p,
-  };
+}
+
+export function randRange(rng, lo, hi) {
+  return lo + rng() * (hi - lo);
+}
+
+export function randInt(rng, lo, hi) {
+  return Math.floor(randRange(rng, lo, hi + 1));
+}
+
+export function pick(rng, arr) {
+  return arr[Math.floor(rng() * arr.length) % arr.length];
+}
+
+export function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+export function dist2(ax, ay, bx, by) {
+  const dx = ax - bx;
+  const dy = ay - by;
+  return dx * dx + dy * dy;
+}
+
+export function dist(ax, ay, bx, by) {
+  return Math.sqrt(dist2(ax, ay, bx, by));
+}
+
+/** Wrap an angle to [-PI, PI). */
+export function wrapAngle(a) {
+  while (a >= Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+/** Turn `angle` toward `target` by at most `maxDelta` radians. */
+export function turnToward(angle, target, maxDelta) {
+  const d = wrapAngle(target - angle);
+  if (d > maxDelta) return angle + maxDelta;
+  if (d < -maxDelta) return angle - maxDelta;
+  return target;
 }
